@@ -6,7 +6,8 @@ import signal
 import argparse
 import sys
 from webhook_server import start_server
-from decision_manager import DecisionDBManager
+from decision_db_manager import DecisionDBManager
+from decision_manager import DecisionManager
 from config_loader import ConfigLoader
 from bybit_client import BybitClient
 
@@ -296,7 +297,7 @@ def main():
         logger.info(f"웹훅 서버 포트가 {args.port}로 설정되었습니다.")
     
     # 결정 매니저 초기화
-    decision_manager = DecisionDBManager()
+    decision_manager = DecisionManager()
     
     # 시스템 상태 요약 출력
     show_status()

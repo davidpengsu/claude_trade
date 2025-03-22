@@ -6,8 +6,8 @@ import traceback
 from flask import Flask, request, jsonify
 from threading import Lock
 from datetime import datetime, timedelta  # 확인: timedelta 추가됨
-
-from decision_manager import DecisionDBManager
+from decision_db_manager import DecisionDBManager
+from decision_manager import DecisionManager
 from config_loader import ConfigLoader
 
 # 로그 디렉토리 생성
@@ -51,7 +51,7 @@ if enable_db_logging:
         enable_db_logging = False
 
 # 결정 매니저 인스턴스 생성
-decision_manager = DecisionDBManager()
+decision_manager = DecisionManager()
 
 # 요청 처리 중 동시성 이슈 방지를 위한 락
 request_lock = Lock()

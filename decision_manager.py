@@ -1,397 +1,363 @@
-import pymysql
+import json
 import logging
 import os
-import json
 import time
-import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional
+
+from bybit_client import BybitClient
+from data_collector import DataCollector
+from claude_client import ClaudeClient
+from config_loader import ConfigLoader
+from execution_client import ExecutionClient
 
 # 로그 디렉토리 생성
 os.makedirs("logs", exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("logs/decision_db.log"),
+        logging.FileHandler("logs/decision_manager.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("decision_db_manager")
+logger = logging.getLogger("decision_manager")
 
-class DecisionDBManager:
+
+class DecisionManager:
     """
-    결정 서버 데이터베이스 관리 클래스
+    거래 결정 관리 클래스
     
-    웹훅 이벤트 및 결정 프로세스 로그를 저장하고 조회하는 기능 제공
+    웹훅에서 오는 신호를 기반으로 거래 결정을 하고,
+    Claude AI를 통해 결정을 검증한 후 실행 서버에 전달합니다.
     """
     
-    def __init__(self, host: str, user: str, password: str, database: str = "trading_decisions", port: int = 3306):
-        """
-        DecisionDBManager 초기화
+    def __init__(self):
+        """DecisionManager 초기화"""
+        # 설정 로드
+        self.config = ConfigLoader()
+        self.settings = self.config.load_config("system_settings.json")
         
-        Args:
-            host: 데이터베이스 호스트
-            user: 데이터베이스 사용자
-            password: 데이터베이스 비밀번호
-            database: 데이터베이스 이름
-            port: MySQL 포트
-        """
-        self.config = {
-            'host': host,
-            'user': user,
-            'password': password,
-            'database': database,
-            'port': port,
-            'charset': 'utf8mb4',
-            'connect_timeout': 10,  # 연결 타임아웃 설정
-            'cursorclass': pymysql.cursors.DictCursor
-        }
-        self._init_connection()
+        # Claude 클라이언트 초기화 (공유)
+        claude_config = self.config.get_claude_api_key()
+        self.claude_client = ClaudeClient(
+            claude_config["key"],
+            claude_config["model"]
+        )
+        
+        # 실행 서버 클라이언트 초기화
+        execution_config = self.config.get_execution_server_config()
+        self.execution_client = ExecutionClient(
+            execution_config["url"],
+            execution_config["api_key"]
+        )
+        
+        # 코인별 Bybit 클라이언트 및 데이터 수집기 초기화
+        self.bybit_clients = {}
+        self.data_collectors = {}
+        
+        for symbol in self.settings.get("symbols", []):
+            # 코인 심볼에서 기본 코인 이름 추출 (예: BTCUSDT -> BTC)
+            coin_base = symbol.replace("USDT", "")
+            
+            # 해당 코인의 API 키로 Bybit 클라이언트 초기화
+            bybit_config = self.config.get_bybit_api_key(symbol)
+            bybit_client = BybitClient(
+                bybit_config["key"],
+                bybit_config["secret"]
+            )
+            
+            # 클라이언트 및 데이터 수집기 저장
+            self.bybit_clients[symbol] = bybit_client
+            self.data_collectors[symbol] = DataCollector(bybit_client)
+        
+        # 기타 설정 값
+        self.retry_attempts = int(self.settings.get("retry_attempts", 3))
+        self.retry_delay_seconds = int(self.settings.get("retry_delay_seconds", 30))
     
-    def _init_connection(self):
-        """데이터베이스 연결 초기화"""
-        try:
-            self.conn = pymysql.connect(**self.config)
-            logger.info("데이터베이스 연결 성공")
-        except pymysql.Error as err:
-            logger.error(f"데이터베이스 연결 실패: {err}")
-            raise
-    
-    def _ensure_connection(self):
-        """연결 유효성 확인 및 재연결"""
-        try:
-            # PyMySQL에서는 is_connected가 없으므로 간단한 쿼리로 연결 상태 확인
-            self.conn.ping(reconnect=True)
-        except pymysql.Error as e:
-            logger.error(f"데이터베이스 재연결 중 오류 발생: {e}")
-            self._init_connection()
-    
-    def log_event(self, event_data: Dict[str, Any]) -> str:
+    def get_bybit_client(self, symbol: str) -> BybitClient:
         """
-        결정 이벤트 로그 저장
-        
-        Args:
-            event_data: 이벤트 데이터
-            
-        Returns:
-            생성된 이벤트 ID
-        """
-        self._ensure_connection()
-        
-        # 이벤트 ID 생성
-        event_id = event_data.get('eventId', str(uuid.uuid4()))
-        
-        # 한국 시간 (KST, UTC+9) 계산
-        utc_now = datetime.utcnow()
-        kst_now = utc_now + timedelta(hours=9)
-        
-        # 기본값 설정
-        event_data.setdefault('eventId', event_id)
-        event_data.setdefault('occurKstDate', kst_now)
-        event_data.setdefault('occurUtcDate', utc_now)
-        
-        # additionalInfo가 딕셔너리면 JSON으로 변환
-        if isinstance(event_data.get('additionalInfo'), dict):
-            event_data['additionalInfo'] = json.dumps(event_data['additionalInfo'])
-        
-        # SQL 쿼리 실행
-        try:
-            with self.conn.cursor() as cursor:
-                query = """
-                INSERT INTO decision_events (
-                    eventId, eventName, eventSymbol, eventPos, holdingPos,
-                    prAnswer, prReason, sendExecuteServer, occurKstDate, occurUtcDate,
-                    responseTime, entryPrice, currentPrice, additionalInfo
-                ) VALUES (
-                    %s, %s, %s, %s, %s, 
-                    %s, %s, %s, %s, %s, 
-                    %s, %s, %s, %s
-                )
-                """
-                
-                params = (
-                    event_data.get('eventId'),
-                    event_data.get('eventName'),
-                    event_data.get('eventSymbol'),
-                    event_data.get('eventPos'),
-                    event_data.get('holdingPos', 'none'),
-                    event_data.get('prAnswer'),
-                    event_data.get('prReason'),
-                    event_data.get('sendExecuteServer', 0),
-                    event_data.get('occurKstDate'),
-                    event_data.get('occurUtcDate'),
-                    event_data.get('responseTime'),
-                    event_data.get('entryPrice'),
-                    event_data.get('currentPrice'),
-                    event_data.get('additionalInfo')
-                )
-                
-                cursor.execute(query, params)
-            
-            self.conn.commit()
-            logger.info(f"이벤트 로그 저장 성공: {event_id}")
-            return event_id
-            
-        except Exception as e:
-            logger.error(f"이벤트 로그 저장 중 오류 발생: {e}")
-            self.conn.rollback()
-            raise
-    
-    def update_event(self, event_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        이벤트 로그 업데이트
-        
-        Args:
-            event_id: 이벤트 ID
-            update_data: 업데이트할 데이터
-            
-        Returns:
-            업데이트 성공 여부
-        """
-        self._ensure_connection()
-        
-        try:
-            # additionalInfo가 딕셔너리면 JSON으로 변환
-            if isinstance(update_data.get('additionalInfo'), dict):
-                update_data['additionalInfo'] = json.dumps(update_data['additionalInfo'])
-            
-            # 업데이트할 필드 구성
-            set_clause = ", ".join([f"{key} = %s" for key in update_data.keys()])
-            query = f"UPDATE decision_events SET {set_clause} WHERE eventId = %s"
-            
-            # 파라미터 구성
-            params = list(update_data.values())
-            params.append(event_id)
-            
-            # 쿼리 실행
-            with self.conn.cursor() as cursor:
-                cursor.execute(query, params)
-                affected_rows = cursor.rowcount
-            
-            self.conn.commit()
-            
-            if affected_rows == 0:
-                logger.warning(f"이벤트 ID가 존재하지 않음: {event_id}")
-                return False
-                
-            logger.info(f"이벤트 로그 업데이트 성공: {event_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"이벤트 로그 업데이트 중 오류 발생: {e}")
-            self.conn.rollback()
-            return False
-    
-    def get_event(self, event_id: str) -> Optional[Dict[str, Any]]:
-        """
-        이벤트 로그 조회
-        
-        Args:
-            event_id: 이벤트 ID
-            
-        Returns:
-            이벤트 데이터 또는 None
-        """
-        self._ensure_connection()
-        
-        try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT * FROM decision_events WHERE eventId = %s"
-                cursor.execute(query, (event_id,))
-                result = cursor.fetchone()
-            
-            if result:
-                logger.info(f"이벤트 로그 조회 성공: {event_id}")
-                return result
-            else:
-                logger.warning(f"이벤트 ID가 존재하지 않음: {event_id}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"이벤트 로그 조회 중 오류 발생: {e}")
-            return None
-    
-    def get_events_by_symbol(self, symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        심볼별 이벤트 로그 조회
+        특정 심볼의 Bybit 클라이언트 조회
         
         Args:
             symbol: 심볼 (예: "BTCUSDT")
-            limit: 최대 조회 수
             
         Returns:
-            이벤트 데이터 리스트
+            해당 심볼의 Bybit 클라이언트
         """
-        self._ensure_connection()
+        if symbol not in self.bybit_clients:
+            raise ValueError(f"지원하지 않는 심볼입니다: {symbol}")
         
-        try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT * FROM decision_events WHERE eventSymbol = %s ORDER BY occurUtcDate DESC LIMIT %s"
-                cursor.execute(query, (symbol, limit))
-                results = cursor.fetchall()
-            
-            logger.info(f"{symbol} 이벤트 로그 {len(results)}개 조회 성공")
-            return results
-                
-        except Exception as e:
-            logger.error(f"이벤트 로그 조회 중 오류 발생: {e}")
-            return []
+        return self.bybit_clients[symbol]
     
-    def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_data_collector(self, symbol: str) -> DataCollector:
         """
-        최근 이벤트 로그 조회
+        특정 심볼의 데이터 수집기 조회
         
         Args:
-            limit: 최대 조회 수
+            symbol: 심볼 (예: "BTCUSDT")
             
         Returns:
-            이벤트 데이터 리스트
+            해당 심볼의 데이터 수집기
         """
-        self._ensure_connection()
+        if symbol not in self.data_collectors:
+            raise ValueError(f"지원하지 않는 심볼입니다: {symbol}")
         
-        try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT * FROM decision_events ORDER BY occurUtcDate DESC LIMIT %s"
-                cursor.execute(query, (limit,))
-                results = cursor.fetchall()
-            
-            logger.info(f"최근 이벤트 로그 {len(results)}개 조회 성공")
-            return results
-                
-        except Exception as e:
-            logger.error(f"이벤트 로그 조회 중 오류 발생: {e}")
-            return []
+        return self.data_collectors[symbol]
     
-    def get_events_by_date_range(self, start_date: datetime, end_date: datetime, symbol: str = None) -> List[Dict[str, Any]]:
+    def get_active_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        날짜 범위별 이벤트 로그 조회
+        특정 심볼의 활성 포지션 조회
         
         Args:
-            start_date: 시작 날짜
-            end_date: 종료 날짜
-            symbol: 심볼 (특정 심볼만 조회 시)
+            symbol: 심볼 (예: "BTCUSDT")
             
         Returns:
-            이벤트 데이터 리스트
+            포지션 정보 또는 None
         """
-        self._ensure_connection()
+        # 해당 심볼의 Bybit 클라이언트 조회
+        bybit_client = self.get_bybit_client(symbol)
+        
+        # 바이비트 API를 통해 현재 포지션 조회
+        position = bybit_client.get_positions(symbol)
+        
+        # 포지션이 없으면 None 반환
+        if not position.get("exists", False):
+            return None
+        
+        return position
+    
+    def handle_open_position(self, symbol: str, position_type: str) -> Dict[str, Any]:
+        """
+        포지션 진입 웹훅 처리
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            position_type: 포지션 타입 ("long" 또는 "short")
+            
+        Returns:
+            처리 결과
+        """
+        # 대소문자 통일
+        position_type = position_type.lower()
+        logger.info(f"{symbol} {position_type} 포지션 진입 신호 수신")
         
         try:
-            with self.conn.cursor() as cursor:
-                if symbol:
-                    query = """
-                    SELECT * FROM decision_events 
-                    WHERE occurUtcDate BETWEEN %s AND %s 
-                    AND eventSymbol = %s
-                    ORDER BY occurUtcDate DESC
-                    """
-                    cursor.execute(query, (start_date, end_date, symbol))
+            # 현재 포지션 확인
+            current_position = self.get_active_position(symbol)
+            
+            # 시장 데이터 수집
+            data_collector = self.get_data_collector(symbol)
+            market_data = data_collector.get_market_data(symbol)
+            
+            if not market_data:
+                return {"status": "error", "message": "시장 데이터 수집 실패"}
+            
+            # 시장 데이터에서 현재 가격 추출
+            current_price = market_data.current_price
+            if current_price is None:
+                return {"status": "error", "message": "현재 가격 조회 실패"}
+            
+            # 1. 포지션이 없는 경우
+            if current_position is None:
+                # Claude AI에게 진입 적절성 검증 요청
+                ai_decision = self.claude_client.verify_entry(symbol, position_type, market_data)
+                
+                if ai_decision.get("Answer") == "yes":
+                    logger.info(f"{symbol} {position_type} 포지션 진입 결정 (AI 승인)")
+                    
+                    # 실행 서버에 신호 전송
+                    execution_result = self.execution_client.send_open_position(
+                        symbol, 
+                        position_type,
+                        ai_decision
+                    )
+                    
+                    if execution_result.get("status") == "success":
+                        return {
+                            "status": "success",
+                            "message": f"{symbol} {position_type} 포지션 진입 신호 전송 성공",
+                            "ai_decision": ai_decision
+                        }
+                    else:
+                        return {
+                            "status": "error",
+                            "message": f"실행 서버 통신 오류: {execution_result.get('message')}",
+                            "ai_decision": ai_decision
+                        }
+                    
                 else:
-                    query = """
-                    SELECT * FROM decision_events 
-                    WHERE occurUtcDate BETWEEN %s AND %s
-                    ORDER BY occurUtcDate DESC
-                    """
-                    cursor.execute(query, (start_date, end_date))
-                
-                results = cursor.fetchall()
+                    logger.info(f"{symbol} {position_type} 포지션 진입 거부 (AI 거부)")
+                    reason = ai_decision.get("Reason", "알 수 없는 이유")
+                    return {"status": "rejected", "message": f"AI가 진입을 거부함: {reason}", "ai_decision": ai_decision}
             
-            symbol_str = f"{symbol} " if symbol else ""
-            logger.info(f"{symbol_str}날짜 범위 이벤트 로그 {len(results)}개 조회 성공")
-            return results
+            # 2. 현재 포지션이 있는 경우 (방향은 다를 수 있음)
+            else:
+                current_side = current_position.get("position_type")
+                
+                # 2.1. 동일한 방향의 포지션이 이미 있는 경우
+                if current_side == position_type:
+                    logger.info(f"이미 {symbol} {position_type} 포지션이 있습니다")
+                    return {"status": "skipped", "message": f"이미 {position_type} 포지션이 있습니다"}
+                
+                # 2.2. 반대 방향의 포지션이 있는 경우
+                logger.info(f"{symbol} 반대 방향({current_side}) 포지션이 있어 청산 후 {position_type} 진입 필요")
+                
+                # 새 포지션 진입 검증
+                ai_decision = self.claude_client.verify_entry(symbol, position_type, market_data)
+                
+                if ai_decision.get("Answer") != "yes":
+                    logger.info(f"{symbol} {position_type} 포지션 진입 거부 (AI 거부)")
+                    reason = ai_decision.get("Reason", "알 수 없는 이유")
+                    return {
+                        "status": "rejected",
+                        "message": f"기존 포지션({current_side}) 청산 및 새 진입({position_type}) AI 거부: {reason}",
+                        "ai_decision": ai_decision
+                    }
+                
+                # 실행 서버에 신호 전송 (기존 포지션 청산 + 새 포지션 진입)
+                execution_result = self.execution_client.send_open_position(
+                    symbol, 
+                    position_type,
+                    ai_decision
+                )
+                
+                if execution_result.get("status") == "success":
+                    return {
+                        "status": "success",
+                        "message": f"{symbol} 포지션 전환 신호 전송 성공 ({current_side} → {position_type})",
+                        "ai_decision": ai_decision
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"실행 서버 통신 오류: {execution_result.get('message')}",
+                        "ai_decision": ai_decision
+                    }
                 
         except Exception as e:
-            logger.error(f"이벤트 로그 조회 중 오류 발생: {e}")
-            return []
+            logger.exception(f"{symbol} {position_type} 포지션 진입 결정 중 오류 발생: {e}")
+            return {"status": "error", "message": f"포지션 진입 결정 중 오류 발생: {str(e)}"}
     
-    def get_events_by_event_type(self, event_type: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def handle_close_position(self, symbol: str) -> Dict[str, Any]:
         """
-        이벤트 타입별 로그 조회
+        포지션 청산 웹훅 처리
         
         Args:
-            event_type: 이벤트 타입 (예: "open_pos")
-            limit: 최대 조회 수
+            symbol: 심볼 (예: "BTCUSDT")
             
         Returns:
-            이벤트 데이터 리스트
+            처리 결과
         """
-        self._ensure_connection()
+        logger.info(f"{symbol} 포지션 청산 신호 수신")
         
         try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT * FROM decision_events WHERE eventName = %s ORDER BY occurUtcDate DESC LIMIT %s"
-                cursor.execute(query, (event_type, limit))
-                results = cursor.fetchall()
+            # 현재 포지션 확인
+            current_position = self.get_active_position(symbol)
             
-            logger.info(f"{event_type} 이벤트 로그 {len(results)}개 조회 성공")
-            return results
+            if not current_position:
+                logger.info(f"{symbol} 활성 포지션이 없습니다")
+                return {"status": "skipped", "message": f"{symbol} 포지션이 없습니다"}
+            
+            # 실행 서버에 청산 신호 전송
+            execution_result = self.execution_client.send_close_position(
+                symbol,
+                current_position
+            )
+            
+            if execution_result.get("status") == "success":
+                return {
+                    "status": "success",
+                    "message": f"{symbol} {current_position.get('position_type')} 포지션 청산 신호 전송 성공"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"실행 서버 통신 오류: {execution_result.get('message')}"
+                }
                 
         except Exception as e:
-            logger.error(f"이벤트 로그 조회 중 오류 발생: {e}")
-            return []
+            logger.exception(f"{symbol} 포지션 청산 결정 중 오류 발생: {e}")
+            return {"status": "error", "message": f"포지션 청산 결정 중 오류 발생: {str(e)}"}
     
-    def close(self):
-        """데이터베이스 연결 종료"""
+    def handle_trend_touch(self, symbol: str) -> Dict[str, Any]:
+        """
+        추세선 터치 웹훅 처리
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            
+        Returns:
+            처리 결과
+        """
+        logger.info(f"{symbol} 추세선 터치 신호 수신")
+        
         try:
-            if hasattr(self, 'conn') and self.conn:
-                self.conn.close()
-            logger.info("데이터베이스 연결 종료")
+            # 현재 포지션 확인
+            current_position = self.get_active_position(symbol)
+            
+            if not current_position:
+                logger.info(f"{symbol} 활성 포지션이 없습니다")
+                return {"status": "skipped", "message": f"{symbol} 포지션이 없습니다"}
+            
+            # 시장 데이터 수집
+            data_collector = self.get_data_collector(symbol)
+            market_data = data_collector.get_market_data(symbol)
+            
+            if not market_data:
+                return {"status": "error", "message": "시장 데이터 수집 실패"}
+            
+            # Claude AI에게 포지션 유지/청산 적절성 검증 요청
+            trend_type = "상승" if current_position.get("position_type") == "long" else "하락"
+            ai_decision = self.claude_client.verify_trend_touch(symbol, current_position, trend_type, market_data)
+            
+            if ai_decision.get("Answer") == "yes":  # yes = 청산
+                logger.info(f"{symbol} {current_position.get('position_type')} 포지션 청산 결정 (AI 승인)")
+                
+                # 실행 서버에 청산 신호 전송
+                execution_result = self.execution_client.send_trend_touch_decision(
+                    symbol,
+                    current_position,
+                    ai_decision
+                )
+                
+                if execution_result.get("status") == "success":
+                    return {
+                        "status": "success",
+                        "message": f"{symbol} {current_position.get('position_type')} 포지션 청산 신호 전송 성공 (추세선 터치)",
+                        "ai_decision": ai_decision
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"실행 서버 통신 오류: {execution_result.get('message')}",
+                        "ai_decision": ai_decision
+                    }
+            else:
+                logger.info(f"{symbol} {current_position.get('position_type')} 포지션 유지 결정 (AI 권장)")
+                reason = ai_decision.get("Reason", "알 수 없는 이유")
+                return {"status": "maintain", "message": f"AI 결정: 포지션 유지 - {reason}", "ai_decision": ai_decision}
+                
         except Exception as e:
-            logger.error(f"데이터베이스 연결 종료 중 오류 발생: {e}")
+            logger.exception(f"{symbol} 추세선 터치 결정 중 오류 발생: {e}")
+            return {"status": "error", "message": f"추세선 터치 결정 중 오류 발생: {str(e)}"}
 
 
 # 기본 사용 예시
 if __name__ == "__main__":
-    from config_loader import ConfigLoader
+    # 결정 매니저 생성
+    manager = DecisionManager()
     
-    # 설정 로드
-    config = ConfigLoader()
-    db_config = config.load_config("db_config.json")
-    
-    if not db_config:
-        print("DB 설정 파일이 없습니다. 기본 설정 파일을 생성합니다.")
-        # 기본 DB 설정 생성
-        db_config = {
-            "host": "43.200.99.154",
-            "user": "root",
-            "password": "center",
-            "database": "trading_decisions"
-        }
-        config.save_config("db_config.json", db_config)
-        print("config/db_config.json 파일에 DB 정보를 입력한 후 다시 실행하세요.")
+    # 특정 심볼의 포지션 확인
+    symbol = "BTCUSDT"
+    position = manager.get_active_position(symbol)
+    if position:
+        print(f"{symbol} 활성 포지션: {position.get('position_type')}, 크기: {position.get('size')}")
     else:
-        try:
-            # DB 매니저 생성
-            db = DecisionDBManager(
-                db_config["host"],
-                db_config["user"],
-                db_config["password"],
-                db_config["database"]
-            )
-            
-            # 테스트 이벤트 로깅
-            event_id = db.log_event({
-                'eventName': 'open_pos',
-                'eventSymbol': 'BTCUSDT',
-                'eventPos': 'long',
-                'holdingPos': 'none',
-                'prAnswer': 'yes',
-                'prReason': 'AI가 승인함',
-                'sendExecuteServer': 1,
-                'responseTime': 0.5,
-                'entryPrice': None,
-                'currentPrice': 50100.0
-            })
-            
-            # 저장된 이벤트 조회
-            event = db.get_event(event_id)
-            print(f"저장된 이벤트: {event}")
-            
-            # 연결 종료
-            db.close()
-            
-        except Exception as e:
-            print(f"DB 테스트 중 오류 발생: {e}")
+        print(f"{symbol} 활성 포지션 없음")
+    
+    # 진입 결정 테스트
+    result = manager.handle_open_position("BTCUSDT", "long")
+    print(f"진입 결정 결과: {result}")
