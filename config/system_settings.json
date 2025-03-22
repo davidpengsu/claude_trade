@@ -1,0 +1,21 @@
+{
+    "webhook_port": 80,
+    "log_level": "INFO",
+    "test_mode": false,
+    
+    "position_size_mode": "fixed",   
+    "position_size_fixed": 60,     
+    "position_size_percent": 10,      
+    
+    "leverage": 5,                   
+    "sl_percent": 1.5,             
+    "tp_percent": 3.0,                
+    
+    "retry_attempts": 3,
+    "retry_delay_seconds": 30,
+    "symbols": [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT"
+    ]
+}
