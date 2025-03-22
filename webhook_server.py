@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 from flask import Flask, request, jsonify
-from position_manager import PositionManager
+from decision_manager import DecisionManager
 from config_loader import ConfigLoader
 from threading import Lock
 
@@ -29,8 +29,8 @@ app = Flask(__name__)
 config = ConfigLoader()
 settings = config.load_config("system_settings.json")
 
-# 포지션 매니저 인스턴스 생성
-position_manager = PositionManager()
+# 결정 매니저 인스턴스 생성
+decision_manager = DecisionManager()
 
 # 요청 처리 중 동시성 이슈 방지를 위한 락
 request_lock = Lock()
@@ -41,7 +41,7 @@ def webhook():
     트레이딩뷰 웹훅 엔드포인트
     
     JSON 형식:
-    1. 포지션 진입: {"event": "open_pos", "symbol": "SOLUSDT", "posistion": "Long"}
+    1. 포지션 진입: {"event": "open_pos", "symbol": "SOLUSDT", "position": "Long"}
     2. 포지션 청산: {"event": "close_pos", "symbol": "SOLUSDT"}
     3. 추세선 터치: {"event": "close_trend_pos", "symbol": "SOLUSDT"}
     """
@@ -77,26 +77,26 @@ def webhook():
             
             # 이벤트 타입에 따른 처리
             if event == 'open_pos':
-                position = data.get('posistion')  # 'position'이 아닌 'posistion'으로 표기됨에 주의
+                position = data.get('position')  # 'position'이 아닌 'position'으로 표기됨에 주의
                 if not position:
-                    logger.error("open_pos 이벤트에 posistion 필드 누락")
+                    logger.error("open_pos 이벤트에 position 필드 누락")
                     return jsonify({"status": "error", "message": "Missing position field"}), 400
                 
                 # 포지션 진입 처리
-                result = position_manager.handle_open_position(symbol, position)
-                logger.info(f"포지션 진입 처리 결과: {result}")
+                result = decision_manager.handle_open_position(symbol, position)
+                logger.info(f"포지션 진입 결정 결과: {result}")
                 return jsonify(result)
             
             elif event == 'close_pos':
                 # 포지션 청산 처리
-                result = position_manager.handle_close_position(symbol)
-                logger.info(f"포지션 청산 처리 결과: {result}")
+                result = decision_manager.handle_close_position(symbol)
+                logger.info(f"포지션 청산 결정 결과: {result}")
                 return jsonify(result)
             
             elif event == 'close_trend_pos':
                 # 추세선 터치로 인한 포지션 검증
-                result = position_manager.handle_trend_touch(symbol)
-                logger.info(f"추세선 터치 처리 결과: {result}")
+                result = decision_manager.handle_trend_touch(symbol)
+                logger.info(f"추세선 터치 결정 결과: {result}")
                 return jsonify(result)
             
             else:
@@ -128,7 +128,7 @@ def health_check():
         
         # 활성 포지션 정보 수집
         for symbol in settings.get("symbols", []):
-            position = position_manager.get_active_position(symbol)
+            position = decision_manager.get_active_position(symbol)
             if position and position.get("exists", False):
                 health_info["active_symbols"].append({
                     "symbol": symbol,
@@ -152,16 +152,14 @@ def get_positions():
         
         # 모든 심볼에 대해 포지션 정보 수집
         for symbol in settings.get("symbols", []):
-            position = position_manager.get_active_position(symbol)
+            position = decision_manager.get_active_position(symbol)
             if position and position.get("exists", False):
                 positions[symbol] = {
                     "position_type": position.get("position_type"),
                     "entry_price": position.get("entry_price"),
                     "size": position.get("size"),
                     "leverage": position.get("leverage"),
-                    "unrealized_pnl": position.get("unrealized_pnl"),
-                    "take_profit": position.get("take_profit"),
-                    "stop_loss": position.get("stop_loss")
+                    "unrealized_pnl": position.get("unrealized_pnl")
                 }
         
         return jsonify({
@@ -172,108 +170,6 @@ def get_positions():
     except Exception as e:
         logger.error(f"포지션 정보 조회 중 오류 발생: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/trades', methods=['GET'])
-def get_trades():
-    """
-    거래 로그 조회 엔드포인트
-    """
-    try:
-        limit = request.args.get('limit', default=20, type=int)
-        status = request.args.get('status', default='all')
-        
-        # 거래 로그 로드
-        trades = position_manager.trade_logs
-        
-        # 상태에 따라 필터링
-        if status != 'all':
-            filtered_trades = {
-                trade_id: trade for trade_id, trade in trades.items()
-                if trade.status == status
-            }
-        else:
-            filtered_trades = trades
-        
-        # 최신 거래부터 정렬
-        sorted_trades = sorted(
-            filtered_trades.values(),
-            key=lambda x: x.entry_time,
-            reverse=True
-        )
-        
-        # 제한된 수의 거래만 반환
-        limited_trades = sorted_trades[:limit]
-        
-        # JSON 직렬화 가능한 형태로 변환
-        trade_list = []
-        for trade in limited_trades:
-            trade_dict = {
-                "trade_id": trade.trade_id,
-                "symbol": trade.symbol,
-                "position_type": trade.position_type,
-                "entry_price": trade.entry_price,
-                "entry_time": trade.entry_time,
-                "leverage": trade.leverage,
-                "size": trade.size,
-                "reason": trade.reason,
-                "tp_price": trade.tp_price,
-                "sl_price": trade.sl_price,
-                "status": trade.status
-            }
-            
-            # 종료된 거래에 대한 추가 정보
-            if trade.status == "closed":
-                trade_dict.update({
-                    "exit_price": trade.exit_price,
-                    "exit_time": trade.exit_time,
-                    "pnl": trade.pnl,
-                    "exit_reason": trade.exit_reason
-                })
-            
-            trade_list.append(trade_dict)
-        
-        return jsonify({
-            "status": "success",
-            "trades": trade_list,
-            "count": len(trade_list),
-            "total": len(trades)
-        })
-    except Exception as e:
-        logger.error(f"거래 로그 조회 중 오류 발생: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/close_all', methods=['POST'])
-def close_all_positions():
-    """
-    모든 포지션 청산 엔드포인트
-    """
-    with request_lock:
-        try:
-            closed_positions = []
-            errors = []
-            
-            # 모든 심볼에 대해 포지션 청산
-            for symbol in settings.get("symbols", []):
-                try:
-                    position = position_manager.get_active_position(symbol)
-                    if position and position.get("exists", False):
-                        result = position_manager.handle_close_position(symbol)
-                        if result.get("status") == "success":
-                            closed_positions.append(symbol)
-                        else:
-                            errors.append({"symbol": symbol, "error": result.get("message")})
-                except Exception as e:
-                    errors.append({"symbol": symbol, "error": str(e)})
-            
-            return jsonify({
-                "status": "success",
-                "message": f"포지션 청산 완료: {len(closed_positions)}개 성공, {len(errors)}개 실패",
-                "closed_positions": closed_positions,
-                "errors": errors
-            })
-        except Exception as e:
-            logger.error(f"모든 포지션 청산 중 오류 발생: {e}")
-            return jsonify({"status": "error", "message": str(e)}), 500
 
 # 서버 시작 시간 기록
 start_time = time.time()

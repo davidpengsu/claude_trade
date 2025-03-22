@@ -6,7 +6,7 @@ import signal
 import argparse
 import sys
 from webhook_server import start_server
-from position_manager import PositionManager
+from decision_manager import DecisionManager
 from config_loader import ConfigLoader
 from bybit_client import BybitClient
 
@@ -28,7 +28,7 @@ logger = logging.getLogger("main")
 running = True
 webhook_thread = None
 status_thread = None
-position_manager = None
+decision_manager = None
 
 def start_webhook_server_thread():
     """웹훅 서버를 별도 스레드로 실행"""
@@ -47,31 +47,18 @@ def status_check_thread(interval=60):
     """
     global running
     config = ConfigLoader()
-    api_keys = config.load_config("api_keys.json")
     settings = config.load_config("system_settings.json")
-    
-    bybit_client = BybitClient(
-        api_keys["bybit_api"]["key"],
-        api_keys["bybit_api"]["secret"]
-    )
     
     while running:
         try:
             logger.info("시스템 상태 체크 중...")
             
-            # 계좌 잔고 확인
-            try:
-                balance = bybit_client.get_account_balance()
-                logger.info(f"현재 계좌 잔고: {balance['total']} USDT (가용: {balance['available']} USDT)")
-            except Exception as e:
-                logger.error(f"계좌 잔고 확인 중 오류 발생: {e}")
-            
             # 모든 심볼에 대한 포지션 확인
             active_positions = []
             for symbol in settings.get("symbols", []):
                 try:
-                    position = bybit_client.get_positions(symbol)
-                    if position.get("exists", False):
+                    position = decision_manager.get_active_position(symbol)
+                    if position and position.get("exists", False):
                         logger.info(f"활성 포지션: {symbol} {position.get('position_type')} "
                                    f"크기: {position.get('size')} "
                                    f"진입가: {position.get('entry_price')} "
@@ -82,16 +69,6 @@ def status_check_thread(interval=60):
             
             if not active_positions:
                 logger.info("활성 포지션 없음")
-            
-            # 시스템 설정값 출력
-            position_size_mode = settings.get("position_size_mode", "percent")
-            position_size_text = f"{settings.get('position_size_fixed', 100)} USDT" if position_size_mode == "fixed" else f"{settings.get('position_size_percent', 10)}%"
-            
-            logger.info(f"시스템 설정: "
-                       f"포지션 크기={position_size_text}, "
-                       f"레버리지={settings.get('leverage', 5)}x, "
-                       f"SL={settings.get('sl_percent', 1.5)}%, "
-                       f"TP={settings.get('tp_percent', 3.0)}%")
             
             # 간격 대기
             for _ in range(interval):
@@ -131,13 +108,23 @@ def initialize_environment():
             logger.info("config/api_keys.json 파일에 API 키를 입력한 후 다시 실행하세요.")
             return False
         
-        # API 키 설정 확인
-        if not api_keys.get("bybit_api", {}).get("key") or not api_keys.get("bybit_api", {}).get("secret"):
-            logger.error("Bybit API 키가 설정되지 않았습니다. config/api_keys.json 파일을 확인하세요.")
-            return False
+        # API 키 설정 확인 (BTC, ETH, SOL에 대한 각각의 API 키)
+        api_keys_valid = True
+        for coin in ["BTC", "ETH", "SOL"]:
+            coin_api = api_keys.get("bybit_api", {}).get(coin, {})
+            if not coin_api.get("key") or not coin_api.get("secret"):
+                logger.error(f"{coin} Bybit API 키가 설정되지 않았습니다. config/api_keys.json 파일을 확인하세요.")
+                api_keys_valid = False
         
         if not api_keys.get("claude_api", {}).get("key"):
             logger.error("Claude API 키가 설정되지 않았습니다. config/api_keys.json 파일을 확인하세요.")
+            api_keys_valid = False
+        
+        if not api_keys.get("execution_server", {}).get("url"):
+            logger.error("실행 서버 URL이 설정되지 않았습니다. config/api_keys.json 파일을 확인하세요.")
+            api_keys_valid = False
+        
+        if not api_keys_valid:
             return False
         
         # 필요한 디렉토리 생성
@@ -149,7 +136,6 @@ def initialize_environment():
         logger.info(f"웹훅 포트: {settings.get('webhook_port', 8000)}")
         logger.info(f"모니터링 대상 심볼: {', '.join(settings.get('symbols', []))}")
         logger.info(f"로그 레벨: {settings.get('log_level', 'INFO')}")
-        logger.info(f"테스트 모드: {'활성화' if settings.get('test_mode', False) else '비활성화'}")
         
         return True
     
@@ -162,23 +148,15 @@ def show_status():
     try:
         config = ConfigLoader()
         settings = config.load_config("system_settings.json")
-        
-        # 포지션 사이즈 설정 확인
-        position_size_mode = settings.get("position_size_mode", "percent")
-        position_size_text = f"{settings.get('position_size_fixed', 100)} USDT" if position_size_mode == "fixed" else f"{settings.get('position_size_percent', 10)}%"
+        execution_config = config.get_execution_server_config()
         
         logger.info("=" * 60)
-        logger.info("트레이딩뷰-클로드 트레이딩 시스템 시작")
+        logger.info("트레이딩뷰-클로드 결정 서버 시작")
         logger.info("=" * 60)
         logger.info(f"버전: 1.0.0")
         logger.info(f"웹훅 포트: {settings.get('webhook_port', 8000)}")
         logger.info(f"트레이딩 심볼: {', '.join(settings.get('symbols', []))}")
-        logger.info(f"포지션 크기: {position_size_text}")
-        logger.info(f"레버리지: {settings.get('leverage', 5)}x")
-        logger.info(f"손절 비율: {settings.get('sl_percent', 1.5)}%")
-        logger.info(f"익절 비율: {settings.get('tp_percent', 3.0)}%")
-        if settings.get("test_mode", False):
-            logger.info("⚠️ 테스트 모드로 실행 중입니다 ⚠️")
+        logger.info(f"실행 서버 URL: {execution_config.get('url')}")
         logger.info("=" * 60)
         logger.info("웹훅 엔드포인트: http://your-server-ip:8000/webhook")
         logger.info("시스템 상태 확인: http://your-server-ip:8000/health")
@@ -193,15 +171,14 @@ def parse_arguments():
     Returns:
         argparse.Namespace: 파싱된 인자
     """
-    parser = argparse.ArgumentParser(description='트레이딩뷰-클로드 트레이딩 시스템')
-    parser.add_argument('--test', action='store_true', help='테스트 모드로 실행 (실제 거래 없음)')
+    parser = argparse.ArgumentParser(description='트레이딩뷰-클로드 결정 서버')
     parser.add_argument('--port', type=int, help='웹훅 서버 포트 지정')
     parser.add_argument('--init', action='store_true', help='기본 설정 파일 생성 후 종료')
     return parser.parse_args()
 
 def main():
     """메인 실행 함수"""
-    global running, webhook_thread, status_thread, position_manager
+    global running, webhook_thread, status_thread, decision_manager
     
     # 명령줄 인자 파싱
     args = parse_arguments()
@@ -218,14 +195,6 @@ def main():
         logger.error("환경 초기화에 실패했습니다. 프로그램을 종료합니다.")
         return
     
-    # 테스트 모드 설정
-    if args.test:
-        config = ConfigLoader()
-        settings = config.load_config("system_settings.json")
-        settings["test_mode"] = True
-        config.save_config("system_settings.json", settings)
-        logger.info("⚠️ 테스트 모드로 설정되었습니다 ⚠️")
-    
     # 포트 설정
     if args.port:
         config = ConfigLoader()
@@ -234,8 +203,8 @@ def main():
         config.save_config("system_settings.json", settings)
         logger.info(f"웹훅 서버 포트가 {args.port}로 설정되었습니다.")
     
-    # 포지션 매니저 초기화
-    position_manager = PositionManager()
+    # 결정 매니저 초기화
+    decision_manager = DecisionManager()
     
     # 시스템 상태 요약 출력
     show_status()

@@ -51,7 +51,7 @@ def test_bybit_client(api_keys: Dict[str, Any]):
         # 설정에서 캔들 개수 가져오기
         config = ConfigLoader()
         settings = config.load_config("system_settings.json")
-        candles_count = settings.get("candles_count", 200)
+        candles_count = settings.get("candles_count", 100)
         
         # 캔들스틱 데이터 조회 (테스트용으로 10개만)
         kline = client.get_kline_data("BTCUSDT", "5", 10)

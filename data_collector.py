@@ -71,7 +71,7 @@ class DataCollector:
         # 설정 로드
         config = ConfigLoader()
         self.settings = config.load_config("system_settings.json")
-        self.candles_count = self.settings.get("candles_count", 200)  # 기본값 200
+        self.candles_count = self.settings.get("candles_count", 100)  # 기본값 100
     
     def get_market_data(self, symbol: str) -> MarketVO:
         """
@@ -84,11 +84,12 @@ class DataCollector:
             수집된 시장 데이터
         """
         # 현재 가격 조회
-        ticker_info = self.bybit_client.get_current_price(symbol)
-        current_price = None
-        if ticker_info.get("retCode") == 0 and ticker_info.get("result", {}).get("list"):
-            current_price = float(ticker_info["result"]["list"][0]["lastPrice"])
+        try:
+            current_price = self.bybit_client.get_current_price(symbol)
             print(f"현재 {symbol} 가격: {current_price}")
+        except Exception as e:
+            print(f"현재 가격 조회 실패: {e}")
+            current_price = None
         
         # 오더북 조회
         orderbook = self.bybit_client.get_order_book(symbol)
@@ -142,7 +143,7 @@ class DataCollector:
             candles_5m=candles_5m_with_indicators,
             candles_15m=candles_15m_with_indicators,
             indicator=indicator
-        )
+        )   
     
     def _process_kline_data(self, kline_data: Dict[str, Any]) -> List[Chart]:
         """

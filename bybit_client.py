@@ -73,7 +73,7 @@ class BybitClient:
         params = {
             "category": "linear",
             "symbol": symbol,
-            "limit": min(limit, 200)
+            "limit": min(limit, 100)
         }
         
         return self._send_get_request("/v5/market/orderbook", params)
