@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 from typing import Dict, Any, Optional
 
 
@@ -17,6 +18,9 @@ class ConfigLoader:
         """
         self.config_dir = config_dir
         self.prompt_dir = prompt_dir
+        
+        # 로거 설정
+        self.logger = logging.getLogger("config_loader")
         
         # 설정 디렉토리가 없으면 생성
         if not os.path.exists(config_dir):
@@ -97,6 +101,28 @@ class ConfigLoader:
             return {"url": "http://localhost:8001/execute", "api_key": ""}
         
         return execution_server
+    
+    def get_db_config(self) -> Dict[str, Any]:
+        """
+        데이터베이스 설정 조회
+        
+        Returns:
+            데이터베이스 접속 정보
+        """
+        db_config = self.load_config("db_config.json")
+        
+        # 설정이 없으면 기본값 반환
+        if not db_config:
+            print("경고: 데이터베이스 설정이 없습니다. 기본 설정을 사용합니다.")
+            return {
+                "host": "43.200.99.154",
+                "user": "root",
+                "password": "center",
+                "database": "trading_decisions",
+                "enable_logging": True
+            }
+        
+        return db_config
     
     def load_prompt(self, filename: str) -> Dict[str, Any]:
         """
@@ -206,6 +232,16 @@ class ConfigLoader:
             "retry_delay_seconds": 30
         }
         self.save_config("system_settings.json", system_settings)
+        
+        # 데이터베이스 설정 파일
+        db_settings = {
+            "host": "127.0.0.1",
+            "user": "root",
+            "password": "center",
+            "database": "trading_decisions",
+            "enable_logging": True
+        }
+        self.save_config("db_config.json", db_settings)
 
 
 # 기본 사용 예시
@@ -221,3 +257,9 @@ if __name__ == "__main__":
     for coin in ["BTC", "ETH", "SOL"]:
         api_key = config.get_bybit_api_key(f"{coin}USDT")
         print(f"{coin} API 키: {api_key.get('key', '없음')}")
+    
+    # DB 설정 확인
+    db_config = config.get_db_config()
+    print(f"DB 호스트: {db_config.get('host', '없음')}")
+    print(f"DB 사용자: {db_config.get('user', '없음')}")
+    print(f"DB 로깅 활성화: {db_config.get('enable_logging', False)}")

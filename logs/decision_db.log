@@ -1,0 +1,6 @@
+2025-03-23 01:32:22,236 - decision_db_manager - ERROR - 데이터베이스 연결 실패: (2003, "Can't connect to MySQL server on '127.0.0.1' ([WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다)")
+2025-03-23 01:32:22,237 - webhook_server - ERROR - 데이터베이스 매니저 초기화 실패: (2003, "Can't connect to MySQL server on '127.0.0.1' ([WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다)")
+2025-03-23 01:33:02,221 - decision_db_manager - INFO - 데이터베이스 연결 성공
+2025-03-23 01:33:02,221 - webhook_server - INFO - 데이터베이스 로깅 활성화됨
+2025-03-23 01:33:42,731 - decision_db_manager - INFO - 데이터베이스 연결 성공
+2025-03-23 01:33:42,736 - webhook_server - INFO - 데이터베이스 로깅 활성화됨
