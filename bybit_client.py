@@ -99,19 +99,19 @@ class BybitClient:
         if response.get("retCode") == 0:
             positions = response.get("result", {}).get("list", [])
             # 활성 상태인 포지션만 필터링
-            active_positions = [pos for pos in positions if float(pos.get("size", 0)) > 0]
+            active_positions = [pos for pos in positions if self.safe_float_conversion(pos.get("size", 0)) > 0]
             
             if active_positions:
                 position = active_positions[0]
                 result = {
                     "exists": True,
-                    "size": float(position.get("size", 0)),
+                    "size": self.safe_float_conversion(position.get("size", 0)),
                     "side": position.get("side"),  # Buy 또는 Sell
-                    "entry_price": float(position.get("avgPrice", 0)),
-                    "leverage": float(position.get("leverage", 1)),
-                    "unrealized_pnl": float(position.get("unrealisedPnl", 0)),
-                    "take_profit": float(position.get("takeProfit", 0)),
-                    "stop_loss": float(position.get("stopLoss", 0))
+                    "entry_price": self.safe_float_conversion(position.get("avgPrice", 0)),
+                    "leverage": self.safe_float_conversion(position.get("leverage", 1)),
+                    "unrealized_pnl": self.safe_float_conversion(position.get("unrealisedPnl", 0)),
+                    "take_profit": self.safe_float_conversion(position.get("takeProfit", 0)),
+                    "stop_loss": self.safe_float_conversion(position.get("stopLoss", 0))
                 }
                 result["position_type"] = "long" if result["side"] == "Buy" else "short"
                 return result
@@ -144,7 +144,7 @@ class BybitClient:
         if response.get("retCode") == 0:
             tickers = response.get("result", {}).get("list", [])
             if tickers:
-                return float(tickers[0].get("lastPrice", 0))
+                return self.safe_float_conversion(tickers[0].get("lastPrice", 0))
         
         raise Exception(f"현재 가격 조회 실패: {response}")
     
@@ -179,13 +179,13 @@ class BybitClient:
                 price_filter = instrument.get("priceFilter", {})
                 
                 symbol_info = {
-                    "min_order_qty": float(lot_size_filter.get("minOrderQty", 0.001)),
-                    "max_order_qty": float(lot_size_filter.get("maxOrderQty", 1000000)),
-                    "qty_step": float(lot_size_filter.get("qtyStep", 0.001)),
-                    "tick_size": float(price_filter.get("tickSize", 0.01)),
-                    "min_price": float(price_filter.get("minPrice", 0)),
-                    "max_price": float(price_filter.get("maxPrice", 0)),
-                    "max_leverage": int(instrument.get("leverageFilter", {}).get("maxLeverage", 1))
+                    "min_order_qty": self.safe_float_conversion(lot_size_filter.get("minOrderQty", 0.001)),
+                    "max_order_qty": self.safe_float_conversion(lot_size_filter.get("maxOrderQty", 1000000)),
+                    "qty_step": self.safe_float_conversion(lot_size_filter.get("qtyStep", 0.001)),
+                    "tick_size": self.safe_float_conversion(price_filter.get("tickSize", 0.01)),
+                    "min_price": self.safe_float_conversion(price_filter.get("minPrice", 0)),
+                    "max_price": self.safe_float_conversion(price_filter.get("maxPrice", 0)),
+                    "max_leverage": int(self.safe_float_conversion(instrument.get("leverageFilter", {}).get("maxLeverage", 1)))
                 }
                 
                 # 캐시에 저장
@@ -392,9 +392,9 @@ class BybitClient:
                 for coin_data in coins:
                     if coin_data.get("coin") == coin:
                         return {
-                            "total": float(coin_data.get("walletBalance", 0)),
-                            "available": float(coin_data.get("availableToWithdraw", 0)),
-                            "margin_balance": float(coin_data.get("totalMarginBalance", 0))
+                            "total": self.safe_float_conversion(coin_data.get("walletBalance", 0)),
+                            "available": self.safe_float_conversion(coin_data.get("availableToWithdraw", 0)),
+                            "margin_balance": self.safe_float_conversion(coin_data.get("totalMarginBalance", 0))
                         }
         
         raise Exception(f"계좌 잔고 조회 실패: {response}")
@@ -615,12 +615,12 @@ class BybitClient:
         return round(math.floor(price / tick_size) * tick_size, decimal_places)
     
     @staticmethod
-    def safe_float_conversion(value: Optional[str]) -> float:
+    def safe_float_conversion(value: Optional[Union[str, int, float]]) -> float:
         """
-        문자열을 안전하게 float로 변환
+        값을 안전하게 float로 변환
         
         Args:
-            value: 변환할 문자열 값
+            value: 변환할 값 (문자열, 정수, 실수 또는 None)
             
         Returns:
             변환된 float 값 또는 변환 실패 시 0.0
@@ -672,7 +672,7 @@ if __name__ == "__main__":
             print(f"계좌 잔고: {balance}")
             
             # 주문 수량 계산
-            qty = client.calculate_order_quantity("BTCUSDT", 10.0, 5, btc_price)
+            qty = client.calculate_order_quantity("BTCUSDT", "percent", 10.0, 5, btc_price)
             print(f"계산된 주문 수량: {qty}")
             
             # 현재 포지션 조회

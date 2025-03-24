@@ -205,35 +205,47 @@ class DecisionManager:
                 # 2.2. 반대 방향의 포지션이 있는 경우
                 logger.info(f"{symbol} 반대 방향({current_side}) 포지션이 있어 청산 후 {position_type} 진입 필요")
                 
-                # 새 포지션 진입 검증
+                # 먼저 기존 포지션 청산 신호 전송 (Java 코드와 동일하게 먼저 청산)
+                close_result = self.execution_client.send_close_position(
+                    symbol,
+                    current_position
+                )
+
+                if close_result.get("status") != "success":
+                    return {
+                        "status": "error",
+                        "message": f"기존 포지션({current_side}) 청산 신호 전송 실패: {close_result.get('message')}"
+                    }
+
+                # 청산 신호 전송 후 AI에게 새 포지션 진입 검증 요청
                 ai_decision = self.claude_client.verify_entry(symbol, position_type, market_data)
-                
+
                 if ai_decision.get("Answer") != "yes":
                     logger.info(f"{symbol} {position_type} 포지션 진입 거부 (AI 거부)")
                     reason = ai_decision.get("Reason", "알 수 없는 이유")
                     return {
-                        "status": "rejected",
-                        "message": f"기존 포지션({current_side}) 청산 및 새 진입({position_type}) AI 거부: {reason}",
+                        "status": "partial",
+                        "message": f"기존 포지션({current_side}) 청산 신호 전송 완료. 새 진입({position_type}) AI 거부: {reason}",
                         "ai_decision": ai_decision
                     }
-                
-                # 실행 서버에 신호 전송 (기존 포지션 청산 + 새 포지션 진입)
-                execution_result = self.execution_client.send_open_position(
+
+                # AI 승인 시 새 포지션 진입 신호 전송
+                open_result = self.execution_client.send_open_position(
                     symbol, 
                     position_type,
                     ai_decision
                 )
-                
-                if execution_result.get("status") == "success":
+
+                if open_result.get("status") == "success":
                     return {
                         "status": "success",
-                        "message": f"{symbol} 포지션 전환 신호 전송 성공 ({current_side} → {position_type})",
+                        "message": f"{symbol} 포지션 전환 신호 전송 성공 ({current_side} 청산 → {position_type} 진입)",
                         "ai_decision": ai_decision
                     }
                 else:
                     return {
-                        "status": "error",
-                        "message": f"실행 서버 통신 오류: {execution_result.get('message')}",
+                        "status": "partial",
+                        "message": f"기존 포지션({current_side}) 청산 완료. 새 포지션({position_type}) 진입 신호 전송 실패: {open_result.get('message')}",
                         "ai_decision": ai_decision
                     }
                 
@@ -302,6 +314,24 @@ class DecisionManager:
                 logger.info(f"{symbol} 활성 포지션이 없습니다")
                 return {"status": "skipped", "message": f"{symbol} 포지션이 없습니다"}
             
+            # 현재 가격 확인
+            bybit_client = self.get_bybit_client(symbol)
+            current_price = bybit_client.get_current_price(symbol)
+            entry_price = current_position.get("entry_price", 0)
+            
+            # 가격 변동률 계산
+            change_rate = ((current_price - entry_price) / entry_price) * 100
+            logger.info(f"가격 변동률: {change_rate:.2f}%")
+            
+            # 변동률이 3.3% 미만이면 처리하지 않음 (Java 코드와 동일하게 추가)
+            if abs(change_rate) < 3.3:
+                logger.info(f"가격 변동률이 임계값(3.3%) 미만, 작업 건너뜀")
+                return {
+                    "status": "skipped", 
+                    "message": "가격 변동률이 임계값(3.3%) 미만이므로 분석하지 않음",
+                    "change_rate": f"{change_rate:.2f}%"
+                }
+            
             # 시장 데이터 수집
             data_collector = self.get_data_collector(symbol)
             market_data = data_collector.get_market_data(symbol)
@@ -327,18 +357,25 @@ class DecisionManager:
                     return {
                         "status": "success",
                         "message": f"{symbol} {current_position.get('position_type')} 포지션 청산 신호 전송 성공 (추세선 터치)",
-                        "ai_decision": ai_decision
+                        "ai_decision": ai_decision,
+                        "change_rate": f"{change_rate:.2f}%"
                     }
                 else:
                     return {
                         "status": "error",
                         "message": f"실행 서버 통신 오류: {execution_result.get('message')}",
-                        "ai_decision": ai_decision
+                        "ai_decision": ai_decision,
+                        "change_rate": f"{change_rate:.2f}%"
                     }
             else:
                 logger.info(f"{symbol} {current_position.get('position_type')} 포지션 유지 결정 (AI 권장)")
                 reason = ai_decision.get("Reason", "알 수 없는 이유")
-                return {"status": "maintain", "message": f"AI 결정: 포지션 유지 - {reason}", "ai_decision": ai_decision}
+                return {
+                    "status": "maintain", 
+                    "message": f"AI 결정: 포지션 유지 - {reason}",
+                    "ai_decision": ai_decision,
+                    "change_rate": f"{change_rate:.2f}%"
+                }
                 
         except Exception as e:
             logger.exception(f"{symbol} 추세선 터치 결정 중 오류 발생: {e}")
