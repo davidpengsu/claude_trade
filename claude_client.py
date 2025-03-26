@@ -151,14 +151,13 @@ class ClaudeClient:
             return {"Answer": "no", "Reason": f"오류 발생: {str(e)}"}
 
 
-    def verify_trend_touch(self, symbol: str, position: Dict[str, Any], trend_type: str, market_data) -> Dict[str, str]:
+    def verify_trend_touch(self, symbol: str, position: Dict[str, Any], market_data) -> Dict[str, str]:
         """
         추세선 터치 검증
         
         Args:
             symbol: 심볼 (예: "BTCUSDT")
             position: 현재 포지션 정보
-            trend_type: 추세 타입 ("상승" 또는 "하락")
             market_data: 시장 데이터
             
         Returns:
@@ -190,7 +189,7 @@ class ClaudeClient:
     현재 포지션 정보: {compressed_position}
     너는 코인트레이더의 전략적이고 정교한 선택을 도와주는 전문가다.
     현재 [{position.get("entry_price", 0)}]에 [{position.get("position_type", "unknown")}] 포지션을 진입했는데,
-    [{trend_type}] 추세선에 닿았고 현재 시장 상황은 위와 같아.
+    추세선에 닿았고 현재 시장 상황은 위와 같아.
     현재 포지션을 청산하고 거래를 마무리하는 것이 좋을까? 아니면 포지션을 유지하는 것이 더 좋을까?
     아래 json 형식에 맞추어서 답하고:
     {{"Answer":"yes or no (yes=청산, no=유지)","Reason":"if yes, just say yes, no일경우 왜 포지션을 유지하는 것이 좋은지 상세 이유작성"}}"""

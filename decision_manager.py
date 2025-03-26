@@ -340,18 +340,17 @@ class DecisionManager:
                 return {"status": "error", "message": "시장 데이터 수집 실패"}
             
             # Claude AI에게 포지션 유지/청산 적절성 검증 요청
-            trend_type = "상승" if current_position.get("position_type") == "long" else "하락"
-            ai_decision = self.claude_client.verify_trend_touch(symbol, current_position, trend_type, market_data)
+            # 이 줄을 제거: trend_type = "상승" if current_position.get("position_type") == "long" else "하락"
+            ai_decision = self.claude_client.verify_trend_touch(symbol, current_position, market_data)
             
             if ai_decision.get("Answer") == "yes":  # yes = 청산
                 logger.info(f"{symbol} {current_position.get('position_type')} 포지션 청산 결정 (AI 승인)")
                 
                 # 실행 서버에 청산 신호 전송
-                execution_result = self.execution_client.send_trend_touch_decision(
-                    symbol,
-                    current_position,
-                    ai_decision
-                )
+                execution_result = self.execution_client.send_close_position(
+                symbol,
+                current_position
+            )
                 
                 if execution_result.get("status") == "success":
                     return {
