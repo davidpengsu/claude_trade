@@ -9,7 +9,7 @@ from webhook_server import start_server
 from decision_db_manager import DecisionDBManager
 from decision_manager import DecisionManager
 from config_loader import ConfigLoader
-from bybit_client import BybitClient
+from position_monitor import PositionMonitor  # 새로 추가한 PositionMonitor 임포트
 
 # 데이터베이스 모듈 조건부 가져오기
 try:
@@ -38,6 +38,7 @@ webhook_thread = None
 status_thread = None
 decision_manager = None
 db_manager = None
+position_monitor = None  # 새로 추가한 position_monitor 변수
 
 def start_webhook_server_thread():
     """웹훅 서버를 별도 스레드로 실행"""
@@ -93,9 +94,14 @@ def signal_handler(sig, frame):
     """
     시그널 핸들러 (Ctrl+C 등)
     """
-    global running, db_manager
+    global running, db_manager, position_monitor
     logger.info("종료 신호 수신. 시스템을 종료합니다...")
     running = False
+    
+    # 포지션 모니터 중지
+    if position_monitor:
+        logger.info("포지션 모니터 종료 중...")
+        position_monitor.stop()
     
     # 데이터베이스 연결 정리
     if db_manager:
@@ -266,7 +272,7 @@ CREATE INDEX idx_symbol ON decision_events(eventSymbol);
 
 def main():
     """메인 실행 함수"""
-    global running, webhook_thread, status_thread, decision_manager
+    global running, webhook_thread, status_thread, decision_manager, position_monitor
     
     # 명령줄 인자 파싱
     args = parse_arguments()
@@ -299,6 +305,11 @@ def main():
     # 결정 매니저 초기화
     decision_manager = DecisionManager()
     
+    # 포지션 모니터 초기화 및 시작
+    position_monitor = PositionMonitor(decision_manager)
+    position_monitor.start()
+    logger.info("포지션 모니터링 시작됨 (커스텀 TP/SL 관리)")
+    
     # 시스템 상태 요약 출력
     show_status()
     
@@ -318,7 +329,7 @@ def main():
         
         # 메인 스레드 유지
         while running:
-            time.sleep(1)
+            time.sleep(10)
     
     except KeyboardInterrupt:
         logger.info("사용자에 의한 프로그램 종료")
@@ -328,6 +339,11 @@ def main():
     
     finally:
         running = False
+        
+        # 포지션 모니터 종료
+        if position_monitor:
+            logger.info("포지션 모니터 종료 중...")
+            position_monitor.stop()
         
         # 데이터베이스 연결 정리
         if db_manager:

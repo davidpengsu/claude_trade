@@ -176,6 +176,10 @@ class DecisionManager:
                     )
                     
                     if execution_result.get("status") == "success":
+                        # TP/SL은 별도의 모니터링 스레드에서 관리되므로 bybit_client.set_tp_sl() 호출 제거
+                        
+                        logger.info(f"{symbol} {position_type} 포지션 진입 신호 전송 성공 (TP/SL은 모니터링 스레드에서 관리)")
+                        
                         return {
                             "status": "success",
                             "message": f"{symbol} {position_type} 포지션 진입 신호 전송 성공",
