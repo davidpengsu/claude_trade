@@ -44,13 +44,28 @@ class ExecutionClient:
         Returns:
             서버 응답
         """
+        # 현재 가격 조회 (TP/SL 계산용)
+        current_price = None
+        try:
+            current_price = self.decision_manager.get_bybit_client(symbol).get_current_price(symbol)
+        except Exception as e:
+            logger.warning(f"현재 가격 조회 실패 (TP/SL 계산에 영향): {e}")
+        
+        # TP/SL 계산 (현재 가격 기준)
+        tp_price = None
+        sl_price = None
+        if current_price:
+            tp_price, sl_price = self.decision_manager._calculate_tp_sl(position_type, current_price)
+        
         # 진입 신호 구성
         payload = {
             "action": "open_position",
             "symbol": symbol,
             "position_type": position_type,
             "ai_decision": ai_decision,
-            "timestamp": int(time.time() * 1000)
+            "timestamp": int(time.time() * 1000),
+            "tp_price": tp_price,   # TP 가격 추가
+            "sl_price": sl_price    # SL 가격 추가
         }
         
         return self._send_request(payload)

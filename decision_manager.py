@@ -257,46 +257,55 @@ class DecisionManager:
             logger.exception(f"{symbol} {position_type} 포지션 진입 결정 중 오류 발생: {e}")
             return {"status": "error", "message": f"포지션 진입 결정 중 오류 발생: {str(e)}"}
     
-    def handle_close_position(self, symbol: str) -> Dict[str, Any]:
+    def send_open_position(self, symbol: str, position_type: str, ai_decision: Dict[str, Any]) -> Dict[str, Any]:
         """
-        포지션 청산 웹훅 처리
+        포지션 진입 신호 전송
         
         Args:
             symbol: 심볼 (예: "BTCUSDT")
-            
-        Returns:
-            처리 결과
-        """
-        logger.info(f"{symbol} 포지션 청산 신호 수신")
-        
-        try:
-            # 현재 포지션 확인
-            current_position = self.get_active_position(symbol)
-            
-            if not current_position:
-                logger.info(f"{symbol} 활성 포지션이 없습니다")
-                return {"status": "skipped", "message": f"{symbol} 포지션이 없습니다"}
-            
-            # 실행 서버에 청산 신호 전송
-            execution_result = self.execution_client.send_close_position(
-                symbol,
-                current_position
-            )
-            
-            if execution_result.get("status") == "success":
-                return {
-                    "status": "success",
-                    "message": f"{symbol} {current_position.get('position_type')} 포지션 청산 신호 전송 성공"
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"실행 서버 통신 오류: {execution_result.get('message')}"
-                }
+            position_type: 포지션 타입 ("long" 또는 "short")
+            ai_decision: AI 결정 정보
                 
+        Returns:
+            서버 응답
+        """
+        # 현재 가격 구하기
+        current_price = None
+        try:
+            current_price = self.decision_manager.get_bybit_client(symbol).get_current_price(symbol)
         except Exception as e:
-            logger.exception(f"{symbol} 포지션 청산 결정 중 오류 발생: {e}")
-            return {"status": "error", "message": f"포지션 청산 결정 중 오류 발생: {str(e)}"}
+            logger.warning(f"현재 가격 조회 실패: {e}")
+        
+        # TP/SL 가격 계산
+        tp_price = None
+        sl_price = None
+        
+        if current_price:
+            # 설정 가져오기
+            settings = ConfigLoader().load_config("system_settings.json")
+            tp_percent = settings.get("tp_percent", 3.0)
+            sl_percent = settings.get("sl_percent", 1.5)
+            
+            # 가격 계산
+            if position_type == "long":
+                tp_price = current_price * (1 + tp_percent / 100)
+                sl_price = current_price * (1 - sl_percent / 100)
+            else:  # short
+                tp_price = current_price * (1 - tp_percent / 100)
+                sl_price = current_price * (1 + sl_percent / 100)
+        
+        # 진입 신호 구성 (TP/SL 값 포함)
+        payload = {
+            "action": "open_position",
+            "symbol": symbol,
+            "position_type": position_type,
+            "ai_decision": ai_decision,
+            "timestamp": int(time.time() * 1000),
+            "tp_price": tp_price,  # 계산된 TP 가격 추가
+            "sl_price": sl_price   # 계산된 SL 가격 추가
+        }
+        
+        return self._send_request(payload)
     
     def handle_trend_touch(self, symbol: str) -> Dict[str, Any]:
         """
