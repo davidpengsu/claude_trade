@@ -34,6 +34,7 @@ class DecisionManager:
     Claude AI를 통해 결정을 검증한 후 실행 서버에 전달합니다.
     """
     
+    # 수정된 DecisionManager 초기화 부분
     def __init__(self):
         """DecisionManager 초기화"""
         # 설정 로드
@@ -47,11 +48,12 @@ class DecisionManager:
             claude_config["model"]
         )
         
-        # 실행 서버 클라이언트 초기화
+        # 실행 서버 클라이언트 초기화 (self 참조 전달)
         execution_config = self.config.get_execution_server_config()
         self.execution_client = ExecutionClient(
             execution_config["url"],
-            execution_config["api_key"]
+            execution_config["api_key"],
+            self  # self 참조 전달
         )
         
         # 코인별 Bybit 클라이언트 및 데이터 수집기 초기화

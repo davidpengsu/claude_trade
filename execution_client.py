@@ -14,16 +14,18 @@ class ExecutionClient:
     거래 결정을 실행 서버에 전달하는 역할
     """
     
-    def __init__(self, server_url: str, api_key: str):
+    def __init__(self, server_url: str, api_key: str, decision_manager=None):
         """
         ExecutionClient 초기화
         
         Args:
             server_url: 실행 서버 URL
             api_key: 실행 서버 API 키
+            decision_manager: DecisionManager 인스턴스 (선택적)
         """
         self.server_url = server_url
         self.api_key = api_key
+        self.decision_manager = decision_manager  # decision_manager 참조 저장
         
         # 요청 세션 생성
         self.session = requests.Session()
@@ -46,16 +48,31 @@ class ExecutionClient:
         """
         # 현재 가격 조회 (TP/SL 계산용)
         current_price = None
-        try:
-            current_price = self.decision_manager.get_bybit_client(symbol).get_current_price(symbol)
-        except Exception as e:
-            logger.warning(f"현재 가격 조회 실패 (TP/SL 계산에 영향): {e}")
-        
-        # TP/SL 계산 (현재 가격 기준)
         tp_price = None
         sl_price = None
-        if current_price:
-            tp_price, sl_price = self.decision_manager._calculate_tp_sl(position_type, current_price)
+        
+        try:
+            # decision_manager가 있는 경우 해당 클라이언트 사용
+            if self.decision_manager:
+                bybit_client = self.decision_manager.get_bybit_client(symbol)
+                current_price = bybit_client.get_current_price(symbol)
+                
+                # 설정 값 가져오기 - position_monitor와 동일한 로직 사용
+                settings = self.decision_manager.settings
+                tp_percent = float(settings.get("tp_percent", 3.0))
+                sl_percent = float(settings.get("sl_percent", 1.5))
+                
+                # TP/SL 계산
+                if position_type.lower() == "long":
+                    tp_price = current_price * (1 + tp_percent / 100)
+                    sl_price = current_price * (1 - sl_percent / 100)
+                else:  # short
+                    tp_price = current_price * (1 - tp_percent / 100)
+                    sl_price = current_price * (1 + sl_percent / 100)
+                    
+                logger.info(f"{symbol} {position_type} 포지션 TP/SL 계산: 현재가={current_price}, TP={tp_price}, SL={sl_price}")
+        except Exception as e:
+            logger.warning(f"현재 가격 조회 또는 TP/SL 계산 실패: {e}")
         
         # 진입 신호 구성
         payload = {
@@ -65,7 +82,8 @@ class ExecutionClient:
             "ai_decision": ai_decision,
             "timestamp": int(time.time() * 1000),
             "tp_price": tp_price,   # TP 가격 추가
-            "sl_price": sl_price    # SL 가격 추가
+            "sl_price": sl_price,   # SL 가격 추가
+            "current_price": current_price  # 현재 가격도 추가
         }
         
         return self._send_request(payload)
@@ -162,33 +180,3 @@ class ExecutionClient:
         except Exception as e:
             logger.exception(f"요청 처리 중 오류 발생: {e}")
             return {"status": "error", "message": f"요청 처리 중 오류 발생: {str(e)}"}
-
-
-# 기본 사용 예시
-if __name__ == "__main__":
-    from config_loader import ConfigLoader
-    
-    # 로깅 설정
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # 설정 로드
-    config = ConfigLoader()
-    execution_config = config.get_execution_server_config()
-    
-    # 실행 클라이언트 생성
-    client = ExecutionClient(
-        execution_config["url"],
-        execution_config["api_key"]
-    )
-    
-    # 테스트 신호 전송
-    response = client.send_open_position(
-        "BTCUSDT",
-        "long",
-        {"Answer": "yes", "Reason": "테스트 결정"}
-    )
-    
-    print(f"응답: {response}")
