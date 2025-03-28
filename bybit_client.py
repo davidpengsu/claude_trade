@@ -194,6 +194,179 @@ class BybitClient:
         
         raise Exception(f"심볼 정보 조회 실패: {response}")
     
+    def place_market_order(self, symbol: str, side: str, qty: str, reduce_only: bool = False) -> Dict[str, Any]:
+        """
+        시장가 주문 실행
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            side: 주문 방향 (Buy/Sell)
+            qty: 주문 수량
+            reduce_only: 포지션 감소 전용 여부
+            
+        Returns:
+            주문 결과
+        """
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "side": side,
+            "orderType": "Market",
+            "qty": qty,
+            "reduceOnly": reduce_only
+        }
+        
+        return self._send_post_request("/v5/order/create", params)
+    
+    def set_leverage(self, symbol: str, leverage: int) -> Dict[str, Any]:
+        """
+        레버리지 설정
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            leverage: 레버리지 배수
+            
+        Returns:
+            설정 결과
+        """
+        # 심볼 정보 확인
+        symbol_info = self.get_symbol_info(symbol)
+        max_leverage = symbol_info.get("max_leverage", 1)
+        
+        # 최대 레버리지 제한
+        if int(leverage) > max_leverage:
+            self.logger.warning(f"요청한 레버리지({leverage})가 최대 레버리지({max_leverage})를 초과하여 제한됩니다.")
+            leverage = max_leverage
+        
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "buyLeverage": str(leverage),
+            "sellLeverage": str(leverage)
+        }
+        
+        return self._send_post_request("/v5/position/set-leverage", params)
+    
+    def close_position(self, symbol: str) -> bool:
+        """
+        포지션 청산
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            
+        Returns:
+            성공 여부
+        """
+        # 현재 포지션 조회
+        position = self.get_positions(symbol)
+        
+        if not position.get("exists", False):
+            self.logger.info(f"{symbol} 포지션이 없습니다.")
+            return True
+        
+        # 포지션 방향의 반대 방향으로 시장가 주문
+        side = "Sell" if position.get("side") == "Buy" else "Buy"
+        qty = str(position.get("size"))
+        
+        try:
+            result = self.place_market_order(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                reduce_only=True
+            )
+            
+            if result.get("retCode") == 0:
+                self.logger.info(f"{symbol} 포지션 청산 성공")
+                return True
+            else:
+                self.logger.error(f"{symbol} 포지션 청산 실패: {result}")
+                return False
+        except Exception as e:
+            self.logger.error(f"{symbol} 포지션 청산 중 오류 발생: {e}")
+            return False
+    
+    def cancel_all_orders(self, symbol: str) -> bool:
+        """
+        모든 주문 취소
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            
+        Returns:
+            성공 여부
+        """
+        params = {
+            "category": "linear",
+            "symbol": symbol
+        }
+        
+        try:
+            result = self._send_post_request("/v5/order/cancel-all", params)
+            
+            if result.get("retCode") == 0:
+                self.logger.info(f"{symbol} 모든 주문 취소 성공")
+                return True
+            else:
+                self.logger.error(f"{symbol} 모든 주문 취소 실패: {result}")
+                return False
+        except Exception as e:
+            self.logger.error(f"{symbol} 주문 취소 중 오류 발생: {e}")
+            return False
+    
+    def set_tp_sl(self, symbol: str, tp_price: float, sl_price: float) -> bool:
+        """
+        TP/SL 설정
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            tp_price: 익절 가격
+            sl_price: 손절 가격
+            
+        Returns:
+            성공 여부
+        """
+        # 현재 포지션 조회
+        position = self.get_positions(symbol)
+        
+        if not position.get("exists", False):
+            self.logger.warning(f"{symbol} 포지션이 없어 TP/SL을 설정할 수 없습니다.")
+            return False
+        
+        # 가격 소수점 자릿수 계산
+        symbol_info = self.get_symbol_info(symbol)
+        tick_size = symbol_info.get("tick_size")
+        
+        # 소수점 자릿수 계산
+        decimal_places = self._get_decimal_places(tick_size)
+        
+        # 가격 반올림
+        tp_price = self._round_to_tick(tp_price, tick_size, decimal_places)
+        sl_price = self._round_to_tick(sl_price, tick_size, decimal_places)
+        
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "takeProfit": str(tp_price),
+            "stopLoss": str(sl_price),
+            "positionIdx": 0,  # 단일 포지션 모드
+            "tpTriggerBy": "LastPrice",
+            "slTriggerBy": "LastPrice",
+            "tpslMode": "Full"  # Full: 전체 포지션에 적용
+        }
+        
+        try:
+            result = self._send_post_request("/v5/position/trading-stop", params)
+            
+            if result.get("retCode") == 0:
+                self.logger.info(f"{symbol} TP({tp_price})/SL({sl_price}) 설정 성공")
+                return True
+            else:
+                self.logger.error(f"{symbol} TP/SL 설정 실패: {result}")
+                return False
+        except Exception as e:
+            self.logger.error(f"{symbol} TP/SL 설정 중 오류 발생: {e}")
+            return False
     
     def get_account_balance(self, coin: str = "USDT") -> Dict[str, float]:
         """
@@ -226,6 +399,64 @@ class BybitClient:
         
         raise Exception(f"계좌 잔고 조회 실패: {response}")
     
+    def calculate_order_quantity(self, symbol: str, position_size_mode: str, position_size_value: float, leverage: int, current_price: float) -> float:
+        """
+        주문 수량 계산
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            position_size_mode: 포지션 크기 모드 ("fixed" 또는 "percent")
+            position_size_value: 포지션 크기 값 (fixed: USDT 금액, percent: 백분율)
+            leverage: 레버리지
+            current_price: 현재 가격
+            
+        Returns:
+            계산된 주문 수량
+        """
+        try:
+            # 심볼 정보 조회
+            symbol_info = self.get_symbol_info(symbol)
+            
+            # 심볼 정보에서 필요한 값 추출
+            min_qty = Decimal(str(symbol_info.get("min_order_qty", 0.001)))
+            step_size = Decimal(str(symbol_info.get("qty_step", 0.001)))
+            max_order_qty = Decimal(str(symbol_info.get("max_order_qty", float("inf"))))
+            
+            # 마진 계산 (고정 금액 또는 계정 잔고의 비율)
+            if position_size_mode == "fixed":
+                # 고정 금액 모드
+                notional = Decimal(str(position_size_value)) * Decimal(str(leverage))
+            else:
+                # 계좌 비율 모드
+                balance = self.get_account_balance()
+                total_balance = Decimal(str(balance["total"]))
+                margin = total_balance * (Decimal(str(position_size_value)) / Decimal("100.0"))
+                notional = margin * Decimal(str(leverage))
+            
+            # 가격으로 나누어 수량 계산
+            raw_qty = notional / Decimal(str(current_price))
+            
+            # step_size에 맞게 수량 조정 (내림)
+            steps = (raw_qty / step_size).to_integral_value(rounding=ROUND_DOWN)
+            qty = steps * step_size
+            
+            # 최소 주문 수량 확인
+            if qty < min_qty:
+                # 최소 주문 수량으로 조정 (step_size의 배수가 되도록)
+                steps = (min_qty / step_size).to_integral_value(rounding=ROUND_UP)
+                qty = steps * step_size
+            
+            # 최대 주문 수량 확인
+            if qty > max_order_qty:
+                qty = max_order_qty
+            
+            # 로그 추가
+            self.logger.info(f"주문 수량 계산: 모드={position_size_mode}, 값={position_size_value}, 레버리지={leverage}, 계산된 수량={float(qty)}")
+            
+            return float(qty)
+        except Exception as e:
+            self.logger.error(f"주문 수량 계산 중 오류 발생: {e}")
+            raise
     
     def _send_get_request(self, endpoint: str, params: Dict[str, Any], requires_auth: bool = False) -> Dict[str, Any]:
         """
@@ -351,6 +582,56 @@ class BybitClient:
         
         # 모든 재시도 실패 시
         raise Exception("API 요청 실패: 최대 재시도 횟수 초과")
+    
+    @staticmethod
+    def _get_decimal_places(step_size: float) -> int:
+        """
+        소수점 자릿수 계산
+        
+        Args:
+            step_size: 스텝 사이즈
+            
+        Returns:
+            소수점 자릿수
+        """
+        step_str = str(step_size).rstrip('0').rstrip('.') if '.' in str(step_size) else str(step_size)
+        if '.' in step_str:
+            return len(step_str.split('.')[1])
+        return 0
+    
+    @staticmethod
+    def _round_to_tick(price: float, tick_size: float, decimal_places: int) -> float:
+        """
+        가격을 tick_size에 맞게 반올림
+        
+        Args:
+            price: 가격
+            tick_size: 틱 사이즈
+            decimal_places: 소수점 자릿수
+            
+        Returns:
+            반올림된 가격
+        """
+        return round(math.floor(price / tick_size) * tick_size, decimal_places)
+    
+    @staticmethod
+    def safe_float_conversion(value: Optional[Union[str, int, float]]) -> float:
+        """
+        값을 안전하게 float로 변환
+        
+        Args:
+            value: 변환할 값 (문자열, 정수, 실수 또는 None)
+            
+        Returns:
+            변환된 float 값 또는 변환 실패 시 0.0
+        """
+        if value is None or value == "":
+            return 0.0
+        
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
 
 
 # 기본 사용 예시

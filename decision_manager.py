@@ -258,6 +258,47 @@ class DecisionManager:
         except Exception as e:
             logger.exception(f"{symbol} {position_type} 포지션 진입 결정 중 오류 발생: {e}")
             return {"status": "error", "message": f"포지션 진입 결정 중 오류 발생: {str(e)}"}
+        
+    def handle_close_position(self, symbol: str) -> Dict[str, Any]:
+        """
+        포지션 청산 웹훅 처리
+        
+        Args:
+            symbol: 심볼 (예: "BTCUSDT")
+            
+        Returns:
+            처리 결과
+        """
+        logger.info(f"{symbol} 포지션 청산 신호 수신")
+        
+        try:
+            # 현재 포지션 확인
+            current_position = self.get_active_position(symbol)
+            
+            if not current_position:
+                logger.info(f"{symbol} 활성 포지션이 없습니다")
+                return {"status": "skipped", "message": f"{symbol} 포지션이 없습니다"}
+            
+            # 실행 서버에 청산 신호 전송
+            execution_result = self.execution_client.send_close_position(
+                symbol,
+                current_position
+            )
+            
+            if execution_result.get("status") == "success":
+                return {
+                    "status": "success",
+                    "message": f"{symbol} {current_position.get('position_type')} 포지션 청산 신호 전송 성공"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"실행 서버 통신 오류: {execution_result.get('message')}"
+                }
+                
+        except Exception as e:
+            logger.exception(f"{symbol} 포지션 청산 결정 중 오류 발생: {e}")
+            return {"status": "error", "message": f"포지션 청산 결정 중 오류 발생: {str(e)}"}
     
     def send_open_position(self, symbol: str, position_type: str, ai_decision: Dict[str, Any]) -> Dict[str, Any]:
         """
