@@ -1,4 +1,6 @@
-# requirements.txt 수정
 requests==2.31.0
-pandas==2.2.0  # 최신 버전
-numpy==1.26.4  # 최신 버전
+pandas==2.2.0
+numpy==1.26.4
+anthropic==0.12.0
+pymysql==1.1.0
+flask==3.0.0
