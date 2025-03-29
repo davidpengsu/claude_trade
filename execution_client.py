@@ -109,28 +109,6 @@ class ExecutionClient:
         
         return self._send_request(payload)
     
-    def send_trend_touch_decision(self, symbol: str, position_info: Dict[str, Any], ai_decision: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        추세선 터치 결정 신호 전송
-        
-        Args:
-            symbol: 심볼 (예: "BTCUSDT")
-            position_info: 현재 포지션 정보
-            ai_decision: AI 결정 정보
-            
-        Returns:
-            서버 응답
-        """
-        # 추세선 터치 신호 구성
-        payload = {
-            "action": "trend_touch",
-            "symbol": symbol,
-            "position_info": position_info,
-            "ai_decision": ai_decision,
-            "timestamp": int(time.time() * 1000)
-        }
-        
-        return self._send_request(payload)
     
     def _send_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
