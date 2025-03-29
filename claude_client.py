@@ -8,10 +8,10 @@ from typing import Dict, Any, List, Optional, Union
 
 from anthropic import Anthropic
 
-# 로그 디렉토리 생성
+# Create logs directory
 os.makedirs("logs", exist_ok=True)
 
-# 로깅 설정
+# Logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,26 +24,26 @@ logger = logging.getLogger("claude_client")
 
 class ClaudeClient:
     """
-    Claude AI API 클라이언트
+    Claude AI API Client
     
-    Anthropic의 Claude API를 이용해 응답을 생성하는 클래스
+    A class for generating responses using Anthropic's Claude API
     """
     
     BASE_URL = "https://api.anthropic.com/v1"
     
     def __init__(self, api_key: str, model: str = "claude-3-7-sonnet-20250219"):
         """
-        ClaudeClient 초기화
+        Initialize ClaudeClient
         
         Args:
-            api_key: Claude API 키
-            model: 사용할 모델 (기본값: claude-3-7-sonnet-20250219)
+            api_key: Claude API key
+            model: Model to use (default: claude-3-7-sonnet-20250219)
         """
         self.api_key = api_key
         self.model = model
-        # Anthropic 클라이언트 사용
+        # Use Anthropic client
         self.client = Anthropic(api_key=api_key)
-        # 직접 HTTP 요청을 보내기 위한 세션
+        # Session for direct HTTP requests
         self.session = requests.Session()
         self.session.headers.update({
             "x-api-key": api_key,
@@ -51,83 +51,96 @@ class ClaudeClient:
             "content-type": "application/json"
         })
         
-        # prompts 디렉토리 생성
+        # Create prompts directory
         os.makedirs("prompts", exist_ok=True)
     
     def verify_entry(self, symbol: str, position_type: str, market_data) -> Dict[str, str]:
         """
-        포지션 진입 검증
+        Verify position entry
         
         Args:
-            symbol: 심볼 (예: "BTCUSDT")
-            position_type: 포지션 타입 ("long" 또는 "short")
-            market_data: 시장 데이터
+            symbol: Symbol (e.g., "BTCUSDT")
+            position_type: Position type ("long" or "short")
+            market_data: Market data
             
         Returns:
-            AI 결정 ({"Answer": "yes/no", "Reason": "이유"})
+            AI decision ({"Answer": "yes/no", "Reason": "reason"})
         """
         try:
-            # 포지션 방향에 따른 모멘텀 방향 설정
-            direction = "상승" if position_type == "long" else "하락"
+            # Set momentum direction based on position type
+            direction = "upward" if position_type == "long" else "downward"
             
-            # MarketVO 객체를 딕셔너리로 변환 (data_collector의 메서드 사용)
+            # Convert MarketVO object to dictionary (using data_collector method)
             if hasattr(market_data, 'indicator'):
-                # data_collector 객체 임시 생성
+                # Create temporary data_collector object
                 from data_collector import DataCollector
                 from bybit_client import BybitClient
                 
-                # 임시 객체를 통해 포맷팅 메서드 호출
+                # Call formatting method via temporary object
                 dc = DataCollector(BybitClient("", ""))
                 market_data_dict = dc.format_trading_summary(market_data)
             else:
-                # 이미 딕셔너리인 경우 그대로 사용
+                # Use as is if already a dictionary
                 market_data_dict = market_data
             
-            # 심볼 접두어 추출 (예: BTCUSDT -> BTC)
+            # Extract symbol prefix (e.g., BTCUSDT -> BTC)
             symbol_prefix = symbol.replace("USDT", "").lower()
             
-            # JSON 데이터 압축 (indent 없음, 구분자 사이 공백 제거)
+            # Compress JSON data (no indentation, remove spaces between separators)
             compressed_market_data = json.dumps(market_data_dict, ensure_ascii=False, separators=(',', ':'))
             
-            # 공백 최소화를 위해 프롬프트 구성 (불필요한 줄바꿈 제거)
-            prompt = f"""현재 시장 상황: {compressed_market_data}
-    너는 코인트레이더의 전략적이고 정교한 선택을 도와주는 전문가다.
-    현재상황에서 [{position_type}] 포지션을 진입하는것은 
-    1%이상의 [{direction}] 모멘텀을 먹을수있는것에대해서 가능할것같아?
-    아래 json 형식에 맞추어서 무조건 yes 라고 답하세요.
-    {{"Answer":"yes or no","Reason":"if yes, just say yes, no일경우 왜 no 결정을 내렸는지 상세 이유작성"}}"""
+            # Construct prompt (minimize whitespace, remove unnecessary line breaks)
+            prompt = f"""You are an expert crypto futures market analyst assisting a professional trader on Bybit.
+
+CURRENT MARKET DATA:
+{compressed_market_data}
+
+QUESTION:
+Based on the market data above, should the trader enter a {position_type} position on {symbol} perpetual futures now? 
+Analyze whether current market conditions are favorable for entering a {direction} trend.
+
+Your analysis should consider:
+- Price action and recent momentum
+- Technical indicators
+- Current market structure and volume patterns
+- Potential support/resistance levels
+
+I need your most accurate and intelligent assessment using your full analytical capabilities as Claude 3.7 Sonnet.
+
+Please provide your decision in JSON format:
+{{"Answer":"yes/no","Reason":"Brief explanation of your decision"}}"""
             
-            # 요청 저장 (원본 형식의 데이터 포함)
+            # Save request (include original data format)
             os.makedirs("prompts", exist_ok=True)
             with open(f"prompts/{symbol_prefix}_request.txt", 'w', encoding='utf-8') as f:
-                # 원본 포맷의 데이터도 함께 저장 (디버깅용)
+                # Also save original formatted data (for debugging)
                 original_format = json.dumps(market_data_dict, indent=2, ensure_ascii=False)
-                f.write(f"# 원본 데이터 (디버깅용)\n{original_format}\n\n# 실제 보낸 프롬프트\n{prompt}")
+                f.write(f"# Original data (for debugging)\n{original_format}\n\n# Actual prompt sent\n{prompt}")
             
-            # AI 응답 생성 (temperature=1로 설정)
+            # Generate AI response (set temperature=1.0 for extended thinking)
             response_text = self.generate_response(prompt, temperature=1.0)
             
-            # 응답 저장
+            # Save response
             with open(f"prompts/{symbol_prefix}_response.txt", 'w', encoding='utf-8') as f:
                 f.write(response_text)
             
-            # JSON 파싱
+            # Parse JSON response
             try:
-                # JSON 형식이 아닌 텍스트 제거
+                # Remove non-JSON text
                 json_text = response_text
                 if "```json" in response_text:
                     json_text = response_text.split("```json")[1].split("```")[0].strip()
                 elif "```" in response_text:
                     json_text = response_text.split("```")[1].split("```")[0].strip()
                 
-                # 응답 파싱
+                # Parse response
                 response_data = json.loads(json_text)
                 
-                # 응답 형식 검증
+                # Validate response format
                 if "Answer" not in response_data or "Reason" not in response_data:
-                    raise ValueError("응답 형식이 올바르지 않습니다.")
+                    raise ValueError("Response format is incorrect.")
                 
-                # Answer를 yes 또는 no로 정규화
+                # Normalize Answer to yes or no
                 answer = response_data["Answer"].lower().strip()
                 if "yes" in answer:
                     response_data["Answer"] = "yes"
@@ -137,95 +150,123 @@ class ClaudeClient:
                 return response_data
                     
             except Exception as parse_error:
-                logger.error(f"AI 응답 파싱 중 오류 발생: {parse_error}")
-                logger.error(f"원본 응답: {response_text}")
+                logger.error(f"Error parsing AI response: {parse_error}")
+                logger.error(f"Original response: {response_text}")
                 
-                # 기본 응답 반환
+                # Return default response
                 if "yes" in response_text.lower():
                     return {"Answer": "yes", "Reason": "yes"}
                 else:
-                    return {"Answer": "no", "Reason": "응답 파싱 실패"}
+                    return {"Answer": "no", "Reason": "Failed to parse response"}
                 
         except Exception as e:
-            logger.exception(f"진입 검증 중 오류 발생: {e}")
-            return {"Answer": "no", "Reason": f"오류 발생: {str(e)}"}
+            logger.exception(f"Error during entry verification: {e}")
+            return {"Answer": "no", "Reason": f"Error occurred: {str(e)}"}
 
 
     def verify_trend_touch(self, symbol: str, position: Dict[str, Any], market_data) -> Dict[str, str]:
         """
-        추세선 터치 검증
+        Verify trendline touch decision
         
         Args:
-            symbol: 심볼 (예: "BTCUSDT")
-            position: 현재 포지션 정보
-            market_data: 시장 데이터
+            symbol: Symbol (e.g., "BTCUSDT")
+            position: Current position information
+            market_data: Market data
             
         Returns:
-            AI 결정 ({"Answer": "yes/no", "Reason": "이유"})
+            AI decision ({"Answer": "yes/no", "Reason": "reason"})
         """
         try:
-            # MarketVO 객체를 딕셔너리로 변환 (data_collector의 메서드 사용)
+            # Convert MarketVO object to dictionary (using data_collector method)
             if hasattr(market_data, 'indicator'):
-                # data_collector 객체 임시 생성
+                # Create temporary data_collector object
                 from data_collector import DataCollector
                 from bybit_client import BybitClient
                 
-                # 임시 객체를 통해 포맷팅 메서드 호출
+                # Call formatting method via temporary object
                 dc = DataCollector(BybitClient("", ""))
                 market_data_dict = dc.format_trading_summary(market_data)
             else:
-                # 이미 딕셔너리인 경우 그대로 사용
+                # Use as is if already a dictionary
                 market_data_dict = market_data
             
-            # 심볼 접두어 추출 (예: BTCUSDT -> BTC)
+            # Extract symbol prefix (e.g., BTCUSDT -> BTC)
             symbol_prefix = symbol.replace("USDT", "").lower()
             
-            # JSON 데이터 압축 (indent 없음, 구분자 사이 공백 제거)
+            # Get position details
+            position_type = position.get("position_type", "unknown")
+            entry_price = position.get("entry_price", 0)
+            
+            # Compress JSON data (no indentation, remove spaces between separators)
             compressed_market_data = json.dumps(market_data_dict, ensure_ascii=False, separators=(',', ':'))
             compressed_position = json.dumps(position, ensure_ascii=False, separators=(',', ':'))
             
-            # 공백 최소화를 위해 프롬프트 구성 (불필요한 줄바꿈 제거)
-            prompt = f"""현재 시장 상황: {compressed_market_data}
-    현재 포지션 정보: {compressed_position}
-    너는 코인트레이더의 전략적이고 정교한 선택을 도와주는 전문가다.
-    현재 [{position.get("entry_price", 0)}]에 [{position.get("position_type", "unknown")}] 포지션을 진입했는데,
-    추세선에 닿았고 현재 시장 상황은 위와 같아.
-    현재 포지션을 청산하고 거래를 마무리하는 것이 좋을까? 아니면 포지션을 유지하는 것이 더 좋을까?
-    아래 json 형식에 맞추어서 답하고:
-    {{"Answer":"yes or no (yes=청산, no=유지)","Reason":"if yes, just say yes, no일경우 왜 포지션을 유지하는 것이 좋은지 상세 이유작성"}}"""
+            # Construct prompt (minimize whitespace, remove unnecessary line breaks)
+            prompt = f"""You are an expert crypto futures market analyst assisting a professional trader on Bybit.
+
+CURRENT MARKET DATA:
+{compressed_market_data}
+
+CURRENT POSITION:
+{compressed_position}
+
+SITUATION:
+The trader is currently in a {position_type} position on {symbol} perpetual futures entered at {entry_price}. 
+The price has just touched a trendline, which is a critical decision point.
+
+QUESTION:
+Based on the comprehensive market data above and the current position information, what is the optimal decision for this {position_type} position that was entered at {entry_price}?
+
+Please provide detailed analysis considering:
+1. Has the original thesis for this trade been validated or invalidated since entry?
+2. Does the trendline touch represent a natural exit point or a continuation signal?
+3. Do the recent candle patterns on the 5-minute and 15-minute timeframes suggest continuation or reversal?
+4. Have any significant support/resistance levels been broken since entry?
+
+Your analysis should consider:
+- Current price in relation to entry price
+- Whether original trend is still intact
+- Volume patterns and momentum indicators
+- Risk of reversal versus potential for continuation
+- Overall market conditions since entry
+
+I need your most accurate and intelligent assessment using your full analytical capabilities as Claude 3.7 Sonnet.
+
+Please provide your decision in JSON format:
+{{"Answer":"yes/no","Reason":"Brief explanation of your decision (yes = close position, no = maintain position)"}}"""
             
-            # 요청 저장 (원본 형식의 데이터 포함)
+            # Save request (include original data format)
             os.makedirs("prompts", exist_ok=True)
             with open(f"prompts/{symbol_prefix}_trend_request.txt", 'w', encoding='utf-8') as f:
-                # 원본 포맷의 데이터도 함께 저장 (디버깅용)
+                # Also save original formatted data (for debugging)
                 original_market = json.dumps(market_data_dict, indent=2, ensure_ascii=False)
                 original_position = json.dumps(position, indent=2, ensure_ascii=False)
-                f.write(f"# 원본 데이터 (디버깅용)\n## 시장 데이터\n{original_market}\n\n## 포지션 정보\n{original_position}\n\n# 실제 보낸 프롬프트\n{prompt}")
+                f.write(f"# Original data (for debugging)\n## Market data\n{original_market}\n\n## Position info\n{original_position}\n\n# Actual prompt sent\n{prompt}")
             
-            # AI 응답 생성 (temperature=1로 설정)
+            # Generate AI response (set temperature=1.0 for extended thinking)
             response_text = self.generate_response(prompt, temperature=1.0)
             
-            # 응답 저장
+            # Save response
             with open(f"prompts/{symbol_prefix}_trend_response.txt", 'w', encoding='utf-8') as f:
                 f.write(response_text)
             
-            # JSON 파싱
+            # Parse JSON response
             try:
-                # JSON 형식이 아닌 텍스트 제거
+                # Remove non-JSON text
                 json_text = response_text
                 if "```json" in response_text:
                     json_text = response_text.split("```json")[1].split("```")[0].strip()
                 elif "```" in response_text:
                     json_text = response_text.split("```")[1].split("```")[0].strip()
                 
-                # 응답 파싱
+                # Parse response
                 response_data = json.loads(json_text)
                 
-                # 응답 형식 검증
+                # Validate response format
                 if "Answer" not in response_data or "Reason" not in response_data:
-                    raise ValueError("응답 형식이 올바르지 않습니다.")
+                    raise ValueError("Response format is incorrect.")
                 
-                # Answer를 yes 또는 no로 정규화
+                # Normalize Answer to yes or no
                 answer = response_data["Answer"].lower().strip()
                 if "yes" in answer:
                     response_data["Answer"] = "yes"
@@ -235,39 +276,39 @@ class ClaudeClient:
                 return response_data
                     
             except Exception as parse_error:
-                logger.error(f"AI 응답 파싱 중 오류 발생: {parse_error}")
-                logger.error(f"원본 응답: {response_text}")
+                logger.error(f"Error parsing AI response: {parse_error}")
+                logger.error(f"Original response: {response_text}")
                 
-                # 기본 응답 반환
+                # Return default response
                 if "yes" in response_text.lower():
                     return {"Answer": "yes", "Reason": "yes"}
                 else:
-                    return {"Answer": "no", "Reason": "응답 파싱 실패"}
+                    return {"Answer": "no", "Reason": "Failed to parse response"}
                 
         except Exception as e:
-            logger.exception(f"추세선 검증 중 오류 발생: {e}")
-            return {"Answer": "no", "Reason": f"오류 발생: {str(e)}"}
+            logger.exception(f"Error during trendline touch verification: {e}")
+            return {"Answer": "no", "Reason": f"Error occurred: {str(e)}"}
 
 
     def generate_response(self, prompt: str, max_tokens: int = 20000, temperature: float = 1.0) -> str:
         """
-        Claude AI에 프롬프트를 보내고 응답 생성
+        Send prompt to Claude AI and generate response
         
         Args:
-            prompt: 프롬프트 텍스트
-            max_tokens: 최대 토큰 수 (기본값: 20000, thinking.budget_tokens보다 커야 함)
-            temperature: 샘플링 온도 (기본값: 1.0 - 더 창의적인 응답)
+            prompt: Prompt text
+            max_tokens: Maximum number of tokens (default: 20000, must be greater than thinking.budget_tokens)
+            temperature: Sampling temperature (default: 1.0 - leverages Claude's extended thinking mode)
             
         Returns:
-            생성된 응답 텍스트
+            Generated response text
         """
-        # thinking.budget_tokens는 max_tokens보다 작아야 함
-        thinking_budget = min(16000, max_tokens - 4000)  # max_tokens보다 적어도 4000 작게 설정
+        # thinking.budget_tokens must be less than max_tokens
+        thinking_budget = min(16000, max_tokens - 4000)  # Set at least 4000 less than max_tokens
         
         try:
-            logger.info(f"Claude API 요청 (모델: {self.model}, max_tokens: {max_tokens}, thinking_budget: {thinking_budget}, temperature: {temperature})")
+            logger.info(f"Claude API request (model: {self.model}, max_tokens: {max_tokens}, thinking_budget: {thinking_budget}, temperature: {temperature})")
             
-            # API 요청 (Anthropic SDK 사용, reasoning mode 활성화)
+            # API request (use Anthropic SDK, activate reasoning mode)
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -281,7 +322,7 @@ class ClaudeClient:
                 ]
             )
             
-            # 응답에서 텍스트 추출 (API 응답 구조 변경 대응)
+            # Extract text from response (handle API response structure changes)
             full_text = ""
             if response.content:
                 for content_block in response.content:
@@ -292,16 +333,16 @@ class ClaudeClient:
                     elif isinstance(content_block, dict) and 'text' in content_block:
                         full_text += content_block['text']
             
-            logger.info(f"Claude API 응답 수신 완료 (길이: {len(full_text)}자)")
+            logger.info(f"Claude API response received (length: {len(full_text)} characters)")
             return full_text
             
         except Exception as e:
-            logger.exception(f"Claude API 요청 중 오류 발생: {e}")
-            # 최대 3번 재시도
+            logger.exception(f"Error during Claude API request: {e}")
+            # Retry up to 3 times
             for i in range(3):
                 try:
-                    logger.info(f"Claude API 재시도 ({i+1}/3)")
-                    time.sleep(2)  # 재시도 전 대기
+                    logger.info(f"Claude API retry ({i+1}/3)")
+                    time.sleep(2)  # Wait before retry
                     
                     response = self.client.messages.create(
                         model=self.model,
@@ -316,7 +357,7 @@ class ClaudeClient:
                         ]
                     )
                     
-                    # 응답에서 텍스트 추출 (API 응답 구조 변경 대응)
+                    # Extract text from response (handle API response structure changes)
                     full_text = ""
                     if response.content:
                         for content_block in response.content:
@@ -327,35 +368,35 @@ class ClaudeClient:
                             elif isinstance(content_block, dict) and 'text' in content_block:
                                 full_text += content_block['text']
                     
-                    logger.info(f"Claude API 응답 수신 완료 (길이: {len(full_text)}자)")
+                    logger.info(f"Claude API response received (length: {len(full_text)} characters)")
                     return full_text
                     
                 except Exception as retry_error:
-                    logger.exception(f"Claude API 재시도 중 오류 발생: {retry_error}")
+                    logger.exception(f"Error during Claude API retry: {retry_error}")
                     continue
             
             return f"Error: {str(e)}"
 
 
-# 기본 사용 예시
+# Basic usage example
 if __name__ == "__main__":
     from config_loader import ConfigLoader
     
-    # 설정 로드
+    # Load configuration
     config = ConfigLoader()
     api_keys = config.load_config("api_keys.json")
     
-    # Claude 클라이언트 생성
+    # Create Claude client
     client = ClaudeClient(
         api_keys["claude_api"]["key"],
         api_keys["claude_api"]["model"]
     )
     
-    # 테스트 프롬프트
+    # Test prompt
     test_prompt = """
-    간단한 테스트 메시지입니다.
+    This is a simple test message.
     """
     
-    # 응답 생성
+    # Generate response
     response = client.generate_response(test_prompt)
-    print(f"\n응답:\n{response}")
+    print(f"\nResponse:\n{response}")

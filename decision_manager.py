@@ -326,8 +326,8 @@ class DecisionManager:
         if current_price:
             # 설정 가져오기
             settings = ConfigLoader().load_config("system_settings.json")
-            tp_percent = settings.get("tp_percent", 3.0)
-            sl_percent = settings.get("sl_percent", 1.5)
+            tp_percent = settings.get("tp_percent", 30.0)
+            sl_percent = settings.get("sl_percent", 2.5)
             
             # 가격 계산
             if position_type == "long":
@@ -379,9 +379,9 @@ class DecisionManager:
             change_rate = ((current_price - entry_price) / entry_price) * 100
             logger.info(f"가격 변동률: {change_rate:.2f}%")
             
-            # 변동률이 3.3% 미만이면 처리하지 않음 (Java 코드와 동일하게 추가)
-            if abs(change_rate) < 3.3:
-                logger.info(f"가격 변동률이 임계값(3.3%) 미만, 작업 건너뜀")
+            # 변동률이 4.3% 미만이면 처리하지 않음 
+            if abs(change_rate) < 4.3:
+                logger.info(f"가격 변동률이 임계값(4.3%) 미만, 작업 건너뜀")
                 return {
                     "status": "skipped", 
                     "message": "가격 변동률이 임계값(3.3%) 미만이므로 분석하지 않음",

@@ -59,8 +59,8 @@ class ExecutionClient:
                 
                 # 설정 값 가져오기 - position_monitor와 동일한 로직 사용
                 settings = self.decision_manager.settings
-                tp_percent = float(settings.get("tp_percent", 3.0))
-                sl_percent = float(settings.get("sl_percent", 1.5))
+                tp_percent = float(settings.get("tp_percent", 30.0))
+                sl_percent = float(settings.get("sl_percent", 2.5))
                 
                 # TP/SL 계산
                 if position_type.lower() == "long":

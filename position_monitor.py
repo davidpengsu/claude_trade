@@ -50,8 +50,8 @@ class PositionMonitor:
         self.symbols = self.settings.get("symbols", [])
         
         # TP/SL 설정
-        self.tp_percent = self.settings.get("tp_percent", 3.0)
-        self.sl_percent = self.settings.get("sl_percent", 1.5)
+        self.tp_percent = self.settings.get("tp_percent", 30.0)
+        self.sl_percent = self.settings.get("sl_percent", 2.5)
         
         # 모니터링 중인 포지션 캐시
         # 구조: {symbol: {"entry_price": float, "position_type": str, "tp_price": float, "sl_price": float}}

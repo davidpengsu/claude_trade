@@ -8,8 +8,8 @@
     "position_size_percent": 10,      
     
     "leverage": 5,                   
-    "sl_percent": 1.5,             
-    "tp_percent": 3.0,                
+    "sl_percent": 2.5,             
+    "tp_percent": 30.0,                
     
     "retry_attempts": 3,
     "retry_delay_seconds": 30,
