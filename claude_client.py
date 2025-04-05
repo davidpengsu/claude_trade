@@ -97,7 +97,8 @@ CURRENT MARKET DATA:
 
 QUESTION:
 Based on the market data above, should the trader enter a {position_type} position on {symbol} perpetual futures now? 
-Analyze whether current market conditions are favorable for entering a {direction} trend.
+
+IMPORTANT DECISION RULE: Answer "yes" if there is at least a 40% probability of a {direction} momentum forming. Be aggressive with your analysis - we only need 40% confidence to enter, not certainty.
 
 Your analysis should consider:
 - Price action and recent momentum
@@ -105,6 +106,7 @@ Your analysis should consider:
 - Current market structure and volume patterns
 - Potential support/resistance levels
 
+Remember: We want to be AGGRESSIVE with entries. If you believe there's a 40% or better chance of {direction} momentum forming, you MUST answer "yes".
 I need your most accurate and intelligent assessment using your full analytical capabilities as Claude 3.7 Sonnet.
 
 Please provide your decision in JSON format:
